@@ -78,6 +78,12 @@ function getRoute(hash = location.hash) {
   if (current === "#dashboard") {
     return { name: "dashboard" };
   }
+  if (current === "#import") {
+    return { name: "import" };
+  }
+  if (current === "#export") {
+    return { name: "export" };
+  }
   if (current === "#accounts/new") {
     return { name: "account-create" };
   }
@@ -404,91 +410,46 @@ function renderFilters(owner) {
   const tags = [...new Set(owner.accounts.flatMap((account) => account.tags ?? []))].sort();
   const linkedOptions = owner.accounts;
   return `
-    <aside class="sidebar">
-      <div class="panel">
-        <h3>Vault Summary</h3>
-        <div class="metric-grid">
-          <div class="stat-card">
-            <div class="label">User</div>
-            <div class="value">${escapeHtml(state.session?.user?.name ?? state.session?.user?.email ?? "Signed in")}</div>
-          </div>
-          <div class="stat-card">
-            <div class="label">Last sync</div>
-            <div class="value">${escapeHtml(formatRelative(owner.sync?.lastSyncAt ?? owner.settings?.lastSeenAt ?? nowIso()))}</div>
-          </div>
-        </div>
+    <section class="filter-bar">
+      <div class="filter-group">
+        <select data-action="filter-platform">
+          <option value="all">All platforms</option>
+          ${platformSet.map((platform) => `<option value="${escapeHtml(platform)}" ${state.filters.platform === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
+        </select>
+        <select data-action="filter-status">
+          <option value="all">All statuses</option>
+          ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${state.filters.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
+        </select>
+        <select data-action="filter-archived">
+          <option value="active" ${state.filters.archived === "active" ? "selected" : ""}>Active</option>
+          <option value="archived" ${state.filters.archived === "archived" ? "selected" : ""}>Archived</option>
+          <option value="all" ${state.filters.archived === "all" ? "selected" : ""}>All</option>
+        </select>
+        <select data-action="filter-favorite">
+          <option value="all" ${state.filters.favorite === "all" ? "selected" : ""}>All favorites</option>
+          <option value="favorite" ${state.filters.favorite === "favorite" ? "selected" : ""}>Favorites</option>
+          <option value="normal" ${state.filters.favorite === "normal" ? "selected" : ""}>Not favorites</option>
+        </select>
+        <select data-action="filter-linked">
+          <option value="all">All linked identities</option>
+          ${linkedOptions.map((account) => `<option value="${escapeHtml(account.id)}" ${state.filters.linkedTo === account.id ? "selected" : ""}>${escapeHtml(account.label)}</option>`).join("")}
+        </select>
+        <select data-action="filter-sort">
+          <option value="updated_desc" ${state.filters.sort === "updated_desc" ? "selected" : ""}>Recently updated</option>
+          <option value="newest" ${state.filters.sort === "newest" ? "selected" : ""}>Newest</option>
+          <option value="alpha" ${state.filters.sort === "alpha" ? "selected" : ""}>Alphabetical</option>
+          <option value="status" ${state.filters.sort === "status" ? "selected" : ""}>Status</option>
+          <option value="platform" ${state.filters.sort === "platform" ? "selected" : ""}>Platform</option>
+        </select>
+        <input data-action="filter-tag" value="${escapeHtml(state.filters.tag)}" placeholder="Tag" />
       </div>
-      <div class="panel">
-        <h3>Filters</h3>
-        <div class="filter-list">
-          <div class="filter-field">
-            <label for="platformFilter">Platform</label>
-            <select id="platformFilter" data-action="filter-platform">
-              <option value="all">All platforms</option>
-              ${platformSet.map((platform) => `<option value="${escapeHtml(platform)}" ${state.filters.platform === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="statusFilter">Status</label>
-            <select id="statusFilter" data-action="filter-status">
-              <option value="all">All statuses</option>
-              ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${state.filters.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="archivedFilter">Archive State</label>
-            <select id="archivedFilter" data-action="filter-archived">
-              <option value="active" ${state.filters.archived === "active" ? "selected" : ""}>Active</option>
-              <option value="archived" ${state.filters.archived === "archived" ? "selected" : ""}>Archived</option>
-              <option value="all" ${state.filters.archived === "all" ? "selected" : ""}>All</option>
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="sortFilter">Sort</label>
-            <select id="sortFilter" data-action="filter-sort">
-              <option value="updated_desc" ${state.filters.sort === "updated_desc" ? "selected" : ""}>Recently updated</option>
-              <option value="newest" ${state.filters.sort === "newest" ? "selected" : ""}>Newest</option>
-              <option value="alpha" ${state.filters.sort === "alpha" ? "selected" : ""}>Alphabetical</option>
-              <option value="status" ${state.filters.sort === "status" ? "selected" : ""}>Status</option>
-              <option value="platform" ${state.filters.sort === "platform" ? "selected" : ""}>Platform</option>
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="favoriteFilter">Favorites</label>
-            <select id="favoriteFilter" data-action="filter-favorite">
-              <option value="all" ${state.filters.favorite === "all" ? "selected" : ""}>All</option>
-              <option value="favorite" ${state.filters.favorite === "favorite" ? "selected" : ""}>Favorites</option>
-              <option value="normal" ${state.filters.favorite === "normal" ? "selected" : ""}>Not favorites</option>
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="linkedFilter">Linked identity</label>
-            <select id="linkedFilter" data-action="filter-linked">
-              <option value="all">All linked identities</option>
-              ${linkedOptions
-                .map(
-                  (account) =>
-                    `<option value="${escapeHtml(account.id)}" ${state.filters.linkedTo === account.id ? "selected" : ""}>${escapeHtml(account.label)}</option>`
-                )
-                .join("")}
-            </select>
-          </div>
-          <div class="filter-field">
-            <label for="tagFilter">Tag</label>
-            <input id="tagFilter" data-action="filter-tag" value="${escapeHtml(state.filters.tag)}" placeholder="Filter by tag..." />
-          </div>
-        </div>
+      <div class="filter-group chips">
+        ${renderChip("All", state.search === "" && state.filters.platform === "all", "preset-filter", "all")}
+        ${renderChip("Favorites", state.filters.favorite === "favorite", "preset-filter", "favorite")}
+        ${renderChip("Archived", state.filters.archived === "archived", "preset-filter", "archived")}
+        ${tags.map((tag) => renderChip(`#${tag}`, normalizeText(state.filters.tag) === normalizeText(tag), "tag-filter", tag)).join("")}
       </div>
-      <div class="panel">
-        <h3>Quick Tags</h3>
-        <div class="filter-chips">
-          ${renderChip("All", state.search === "" && state.filters.platform === "all", "preset-filter", "all")}
-          ${renderChip("Favorites", state.filters.favorite === "favorite", "preset-filter", "favorite")}
-          ${renderChip("Archived", state.filters.archived === "archived", "preset-filter", "archived")}
-          ${tags.map((tag) => renderChip(`#${tag}`, normalizeText(state.filters.tag) === normalizeText(tag), "tag-filter", tag)).join("")}
-        </div>
-      </div>
-    </aside>
+    </section>
   `;
 }
 
@@ -587,153 +548,39 @@ function renderAccountList(owner) {
 function renderAccountDetails(owner) {
   const account = selectedAccount();
   if (!account) {
-    return `
-      <div class="drawer">
-        <div class="empty-state">
-          <h3>Select an account to inspect the graph</h3>
-          <p>The details drawer shows parents, children, custom fields, and recent activity for the selected record.</p>
-        </div>
-      </div>
-    `;
+    return "";
   }
 
   const enriched = store.getAccount(state.ownerId, account.id);
-  const parentNames = enriched.parents.map((entry) => entry.account?.label).filter(Boolean);
-  const childNames = enriched.children.map((entry) => entry.account?.label).filter(Boolean);
-  const activity = owner.activityLog.filter((entry) => entry.entityId === account.id || entry.summary.includes(account.label)).slice(0, 8);
-  const secretPreview = enriched.secretRecord ? "Encrypted secret stored" : "No secret saved";
+  const secretPreview = enriched.secretRecord ? "Encrypted" : "None";
 
   return `
-    <div class="drawer">
-      <div class="drawer-section">
-        <div class="topbar-left">
+    <div class="drawer drawer-compact">
+      <div class="drawer-head">
+        <div class="topbar-left compact">
           <div class="avatar">${escapeHtml(getInitials(enriched.label))}</div>
           <div>
             <h2>${escapeHtml(enriched.label)}</h2>
-            <div class="meta-line">${escapeHtml(enriched.platform)} • ${escapeHtml(enriched.status)}</div>
+            <div class="meta-line">${escapeHtml(enriched.platform)} · ${escapeHtml(enriched.status)}</div>
           </div>
         </div>
-        <div class="badge-row" style="margin-top: 12px;">
+        <div class="badge-row">
           <span class="badge ${enriched.favorite ? "good" : ""}">${enriched.favorite ? "Favorite" : "Normal"}</span>
           <span class="badge ${enriched.archived ? "warn" : "good"}">${enriched.archived ? "Archived" : "Active"}</span>
         </div>
       </div>
-
-      <div class="drawer-section">
-        <div class="drawer-grid">
-          <div class="kv">
-            <div class="key">Main email</div>
-            <div class="val">${escapeHtml(enriched.mainEmail || "—")}</div>
-          </div>
-          <div class="kv">
-            <div class="key">Username</div>
-            <div class="val">${escapeHtml(enriched.username || "—")}</div>
-          </div>
-          <div class="kv">
-            <div class="key">Status</div>
-            <div class="val">${escapeHtml(enriched.status)}</div>
-          </div>
-          <div class="kv">
-            <div class="key">Secret</div>
-            <div class="val">${escapeHtml(secretPreview)}</div>
-          </div>
-          <div class="kv">
-            <div class="key">Created</div>
-            <div class="val">${escapeHtml(formatDateTime(enriched.createdAt))}</div>
-          </div>
-          <div class="kv">
-            <div class="key">Updated</div>
-            <div class="val">${escapeHtml(formatRelative(enriched.updatedAt))}</div>
-          </div>
-        </div>
-        <div class="inline-actions" style="margin-top: 12px;">
-          <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail || "")}" data-label="email">Copy email</button>
-          <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username || "")}" data-label="username">Copy username</button>
-          <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
-          <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
-          <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
-        </div>
+      <div class="drawer-grid compact">
+        <div class="kv"><div class="key">Main email</div><div class="val">${escapeHtml(enriched.mainEmail || "—")}</div></div>
+        <div class="kv"><div class="key">Username</div><div class="val">${escapeHtml(enriched.username || "—")}</div></div>
+        <div class="kv"><div class="key">Secret</div><div class="val">${escapeHtml(secretPreview)}</div></div>
+        <div class="kv"><div class="key">Updated</div><div class="val">${escapeHtml(formatRelative(enriched.updatedAt))}</div></div>
       </div>
-
-      <div class="drawer-section">
-        <h3 class="section-title">Linked parents</h3>
-        <div class="relationship-tree">
-          ${
-            enriched.parents.length
-              ? enriched.parents
-                  .map(
-                    (entry) => `
-                      <div class="relationship-node">
-                        <strong>${escapeHtml(entry.account?.label ?? "Unknown parent")}</strong>
-                        <div class="meta-line">${escapeHtml(entry.relationship.relationshipType)} • ${escapeHtml(entry.relationship.notes || "No relationship note")}</div>
-                      </div>
-                    `
-                  )
-                  .join("")
-              : '<div class="meta-line">No parent links yet.</div>'
-          }
-        </div>
-      </div>
-
-      <div class="drawer-section">
-        <h3 class="section-title">Linked children</h3>
-        <div class="relationship-tree">
-          ${
-            enriched.children.length
-              ? enriched.children
-                  .map(
-                    (entry) => `
-                      <div class="relationship-node">
-                        <strong>${escapeHtml(entry.account?.label ?? "Unknown child")}</strong>
-                        <div class="meta-line">${escapeHtml(entry.relationship.relationshipType)} • ${escapeHtml(entry.relationship.notes || "No relationship note")}</div>
-                      </div>
-                    `
-                  )
-                  .join("")
-              : '<div class="meta-line">No child links yet.</div>'
-          }
-        </div>
-      </div>
-
-      <div class="drawer-section">
-        <h3 class="section-title">Custom fields</h3>
-        <div class="field-list">
-          ${
-            enriched.customFields.length
-              ? enriched.customFields
-                  .map(
-                    (entry) => `
-                      <div class="field-row">
-                        <strong>${escapeHtml(entry.field?.name ?? "Field")}</strong>
-                        <div>${escapeHtml(entry.valueText || "—")}</div>
-                        <div class="meta-line">${escapeHtml(entry.field?.valueType ?? "text")} • ${escapeHtml(entry.field?.visibility ?? "private")}</div>
-                      </div>
-                    `
-                  )
-                  .join("")
-              : '<div class="meta-line">No custom fields defined.</div>'
-          }
-        </div>
-      </div>
-
-      <div class="drawer-section">
-        <h3 class="section-title">Recent activity</h3>
-        <div class="field-list">
-          ${
-            activity.length
-              ? activity
-                  .map(
-                    (entry) => `
-                      <div class="field-row">
-                        <strong>${escapeHtml(entry.summary)}</strong>
-                        <div class="meta-line">${escapeHtml(entry.action)} • ${escapeHtml(formatRelative(entry.createdAt))}</div>
-                      </div>
-                    `
-                  )
-                  .join("")
-              : '<div class="meta-line">No activity yet for this account.</div>'
-          }
-        </div>
+      <div class="inline-actions compact">
+        <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail || "")}" data-label="email">Copy email</button>
+        <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username || "")}" data-label="username">Copy username</button>
+        <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
+        <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
+        <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
       </div>
     </div>
   `;
@@ -746,7 +593,7 @@ function renderTopbar(owner) {
         <div class="brand-mark">Sx</div>
         <div>
           <div class="title">${escapeHtml(config.appName)}</div>
-          <div class="meta-line">${escapeHtml(owner.profile.displayName ?? state.session?.user?.email ?? "Signed in")}</div>
+          <div class="meta-line">${escapeHtml(state.session?.user?.email ?? "Signed in")}</div>
         </div>
       </div>
       <div class="search-wrap">
@@ -946,11 +793,10 @@ function renderAccountEditorWorkspace(owner) {
               <div class="section-title">Account not found</div>
               <div class="meta-line">The route points to a record that does not exist in your current vault.</div>
             </div>
-            <div class="inline-actions">
+          <div class="inline-actions">
               <button class="secondary-button" type="button" data-action="go-dashboard">Back to dashboard</button>
             </div>
           </div>
-          ${renderSyncStatus(owner)}
         </div>
         ${renderAccountDetails(owner)}
       </section>
@@ -1169,6 +1015,57 @@ function renderModal() {
   `;
 }
 
+function renderImportPage() {
+  return `
+    <section class="workspace single">
+      <div class="panel list-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-title">Import vault</div>
+            <div class="meta-line">Restore from a SocialX JSON export.</div>
+          </div>
+          <button class="secondary-button" type="button" data-action="go-dashboard">Back</button>
+        </div>
+        <form id="importForm">
+          <div class="form-field full">
+            <label>Snapshot JSON</label>
+            <textarea name="snapshot" rows="14" placeholder="Paste exported JSON here or choose a file"></textarea>
+            <input type="file" accept="application/json" data-import-file hidden />
+          </div>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" data-action="load-import-file">Load file</button>
+            <button class="secondary-button" type="button" data-action="go-dashboard">Cancel</button>
+            <button class="primary-button" type="submit">Import</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderExportPage(snapshot) {
+  return `
+    <section class="workspace single">
+      <div class="panel list-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-title">Export vault</div>
+            <div class="meta-line">Copy or download your current SocialX snapshot.</div>
+          </div>
+          <button class="secondary-button" type="button" data-action="go-dashboard">Back</button>
+        </div>
+        <div class="code-panel">
+          <pre id="exportSnapshot" style="margin: 0; white-space: pre-wrap;">${escapeHtml(JSON.stringify(snapshot, null, 2))}</pre>
+        </div>
+        <div class="form-actions" style="margin-top: 14px;">
+          <button class="secondary-button" type="button" data-action="copy-export-json">Copy JSON</button>
+          <button class="primary-button" type="button" data-action="download-export-json">Download JSON</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderImportModal() {
   return `
     <div class="modal-backdrop" data-action="close-modal">
@@ -1226,16 +1123,41 @@ function renderDashboard() {
   if (!owner) {
     return renderSignIn();
   }
+  const route = getRoute();
+  if (route.name === "import") {
+    return `
+      <div class="app-shell">
+        <div class="layout">
+          <main class="content wide">
+            ${renderTopbar(owner)}
+            ${renderFilters(owner)}
+            ${renderImportPage()}
+          </main>
+        </div>
+      </div>
+    `;
+  }
+  if (route.name === "export") {
+    return `
+      <div class="app-shell">
+        <div class="layout">
+          <main class="content wide">
+            ${renderTopbar(owner)}
+            ${renderFilters(owner)}
+            ${renderExportPage(store.exportOwner(state.ownerId))}
+          </main>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="app-shell">
-      <div class="layout">
-        ${renderFilters(owner)}
-        <main class="content">
+      <div class="layout layout-clean">
+        <main class="content wide">
           ${renderTopbar(owner)}
-          ${renderSummary(owner)}
-          ${renderSyncStatus(owner)}
+          ${renderFilters(owner)}
           ${isAccountEditorRoute() ? renderAccountEditorWorkspace(owner) : `
-            <section class="workspace">
+            <section class="workspace ${selectedAccount() ? "has-drawer" : "single"}">
               <div class="panel list-panel">
                 <div class="list-toolbar">
                   <div>
@@ -1245,6 +1167,8 @@ function renderDashboard() {
                     </div>
                   </div>
                   <div class="inline-actions">
+                    <button class="secondary-button" type="button" data-action="open-import">Import</button>
+                    <button class="secondary-button" type="button" data-action="open-export">Export</button>
                     <button class="secondary-button" type="button" data-action="open-settings">Settings</button>
                     <button class="primary-button" type="button" data-action="open-create">Add account</button>
                   </div>
@@ -1294,11 +1218,7 @@ function render() {
   }
 
   app.innerHTML = renderDashboard();
-  if (state.modal?.mode === "import") {
-    app.insertAdjacentHTML("beforeend", renderImportModal());
-  } else if (state.modal?.mode === "export") {
-    app.insertAdjacentHTML("beforeend", renderExportModal(state.modal.snapshot ?? {}));
-  } else if (state.modal?.mode === "settings") {
+  if (state.modal?.mode === "settings") {
     const owner = currentOwnerState();
     app.insertAdjacentHTML(
       "beforeend",
@@ -1386,10 +1306,12 @@ function bindGlobalEvents() {
         openAccountEditor(id);
         break;
       case "open-import":
-        openModal({ mode: "import" });
+        navigate("#import");
+        render();
         break;
       case "open-export":
-        openModal({ mode: "export", snapshot: store.exportOwner(state.ownerId) });
+        navigate("#export");
+        render();
         break;
       case "open-settings":
         openModal({ mode: "settings" });
@@ -1488,11 +1410,12 @@ function bindGlobalEvents() {
         break;
       }
       case "copy-export-json":
-        navigator.clipboard?.writeText(JSON.stringify(state.modal?.snapshot ?? {}, null, 2));
+        navigator.clipboard?.writeText(document.querySelector("#exportSnapshot")?.textContent ?? "");
         setToast("Copied", "Export JSON copied to clipboard.", "success");
         break;
       case "download-export-json": {
-        const blob = new Blob([JSON.stringify(state.modal?.snapshot ?? {}, null, 2)], { type: "application/json" });
+        const snapshot = document.querySelector("#exportSnapshot")?.textContent ?? "";
+        const blob = new Blob([snapshot], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
@@ -1567,7 +1490,7 @@ function bindGlobalEvents() {
         const parsed = JSON.parse(text);
         store.importOwner(state.ownerId, parsed, state.ownerId);
         setToast("Import complete", "Vault snapshot restored successfully.", "success");
-        closeModal();
+        goToDashboard();
         render();
       } catch (error) {
         setToast("Import failed", "The JSON could not be parsed.", "danger");
