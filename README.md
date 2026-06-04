@@ -1,45 +1,44 @@
 # SocialX
 
-SocialX is a static GitHub Pages frontend for an identity and account relationship manager backed by Neon Auth and Neon Postgres.
+SocialX is my personal account management system.
 
-## What is implemented
+It gives me one place to sort, search, and manage all of my accounts so I can keep everything organized in one dashboard instead of scattering it across notes, spreadsheets, and different apps.
 
-- Google-only sign-in through Neon Auth
-- Static GitHub Pages-friendly SPA
-- Global search across accounts, relationships, notes, and custom fields
-- Add/edit/archive/delete account flows
-- Parent-child relationship graph
-- Dynamic custom fields
-- Activity log and export/import UI
-- Neon schema file with RLS and indexes
-- Neon-backed persistence adapter with local fallback cache
-- Client-side encrypted secret storage
+## What it is for
 
-## Files
+- Keep all my accounts in one place
+- Search and filter them quickly
+- Track account details, notes, and linked identities
+- Organize accounts by platform, status, and custom labels
+- Keep a private record of important account information
 
-- `index.html` bootstraps the app and inline config
-- `styles.css` contains the full visual system
-- `src/main.js` renders the SPA and handles auth, search, forms, and routing
-- `src/store.js` contains the normalized account graph state layer and Neon sync
-- `src/auth.js` connects to Neon Auth
-- `src/neon.js` loads the Neon SDK in the browser
-- `sql/schema.sql` is the Neon migration/schema source of truth
+## What it helps with
 
-## Runtime model
+- Google, social media, gaming, finance, and government accounts
+- Main login and linked accounts
+- Notes, usernames, emails, IDs, and custom fields
+- Account relationships and history
+- Import and export for backup and recovery
 
-The frontend is a static app and uses Neon Auth for Google login. The account graph is hydrated from Neon Postgres through the Neon Data API when `neonDataApiUrl` is provided in `window.SOCIALX_CONFIG`. If the Data API URL is missing or unavailable, the store falls back to the local browser cache so import/export and draft work can still continue.
+## Login and storage
 
-## Neon setup reminder
+SocialX uses:
 
-- Trusted domains:
-  - `http://127.0.0.1:3001`
-  - `https://volcanorc.github.io`
-- Google authorized redirect URIs:
-  - `http://127.0.0.1:3001/api/auth/callback/google`
-  - `https://ep-nameless-bar-ao306hfx.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth/callback/google`
-- Neon Data API URL:
-  - `https://br-falling-wind-ao9pabrj.data-api.neon.tech`
+- Neon Auth 2.0 for sign-in
+- Neon database storage for the account data
+- GitHub Pages for the public frontend
 
-## Next step
+## Setup note
 
-Paste the Neon Data API URL into `window.SOCIALX_CONFIG.neonDataApiUrl`, then reload the app. Once that is set, SocialX will use Neon Postgres as the primary storage layer and keep the local browser cache as a fallback only.
+The app is built to work as a personal dashboard, and it uses Neon Auth 2.0 plus Neon database storage behind the scenes. If you want to run it locally or connect it to your own data, update the Neon configuration in the app settings and refresh the page.
+
+## Local use
+
+- Open the app locally
+- Sign in with Google
+- Add your accounts
+- Search, sort, and manage them from one place
+
+## Short version
+
+SocialX is a clean personal account organizer that helps me keep all my account information in one secure place so it is easier to find, update, and manage.
