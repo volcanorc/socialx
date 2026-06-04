@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="SocialX is a secure account relationship manager for Google, social, gaming, finance, and government identities."
+    />
+    <meta name="theme-color" content="#07111f" />
+    <title>SocialX</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      window.SOCIALX_CONFIG = {
+        appName: "SocialX",
+        neonAuthUrl: "https://ep-nameless-bar-ao306hfx.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth",
+        neonDataApiUrl: "https://br-falling-wind-ao9pabrj.data-api.neon.tech",
+        githubPagesOrigin: "https://volcanorc.github.io",
+        signInCallback: "#dashboard"
+      };
+    </script>
+    <script type="module" src="./src/main.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

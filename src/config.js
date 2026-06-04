@@ -1,0 +1,16 @@
+const defaults = {
+  appName: "SocialX",
+  neonAuthUrl: "https://ep-nameless-bar-ao306hfx.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth",
+  neonDataApiUrl: "https://br-falling-wind-ao9pabrj.data-api.neon.tech",
+  githubPagesOrigin: "https://volcanorc.github.io",
+  signInCallback: "#dashboard"
+};
+
+export const config = {
+  ...defaults,
+  ...(globalThis.SOCIALX_CONFIG ?? {})
+};
+
+export function getAppOrigin() {
+  return `${location.origin}${location.pathname}`;
+}
