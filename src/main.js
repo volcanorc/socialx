@@ -338,44 +338,31 @@ function renderChip(label, active = false, action = "", value = "") {
 function renderSignIn() {
   return `
     <main class="app-shell hero">
-      <section class="hero-card">
-        <div class="hero-copy">
+      <section class="hero-card hero-card-simple">
+        <div class="sign-in-card sign-in-card-simple">
           <div class="brand">
             <div class="brand-mark">Sx</div>
             <div class="brand-title">
               <strong>${escapeHtml(config.appName)}</strong>
-              <span>Identity graph for the rest of your digital life</span>
+              <span>Simple account organizer</span>
             </div>
           </div>
-          <h1>One Google login. Every account linked with context.</h1>
+          <h1>Keep all my trash accounts in one place.</h1>
           <p>
-            SocialX stores your accounts as a relationship graph, not a flat sheet. Search by email,
-            username, ID number, notes, custom fields, linked identity, and more. Everything is
-            private, structured, and designed for fast retrieval.
+            I use SocialX to keep my dummy accounts and forgotten logins organized so I can find them fast.
           </p>
-          <div class="hero-points">
-            <div class="hero-point"><span class="dot"></span><span>Google-only sign in with Neon Auth.</span></div>
-            <div class="hero-point"><span class="dot"></span><span>Dynamic custom fields for government, finance, gaming, and future platforms.</span></div>
-            <div class="hero-point"><span class="dot"></span><span>Relationships, audit logs, archiving, duplicates, import/export, and secure secret storage.</span></div>
-          </div>
-        </div>
-        <aside class="sign-in-card">
-          <h2>Continue with your Google identity</h2>
-          <p>
-            Your app session is anchored to Neon Auth. After login, you will land on a private dashboard
-            that only shows your own account graph.
-          </p>
-          <button class="primary-button" type="button" data-action="sign-in-google">
-            Continue with Google
+          <button class="google-button" type="button" data-action="sign-in-google" aria-label="Continue with Google">
+            <span class="google-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 48" width="20" height="20" role="img" focusable="false">
+                <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.6 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 5 29.4 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.8-.4-4.5z"/>
+                <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.8 15.1 19 12 24 12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 5 29.4 3 24 3 16.1 3 9.3 7.5 6.3 14.7z"/>
+                <path fill="#4CAF50" d="M24 45c5.3 0 10.1-2 13.7-5.3l-6.3-5.2C29.4 36.2 26.9 37 24 37c-5.2 0-9.6-3.3-11.3-8l-6.6 5C9.1 40.1 16 45 24 45z"/>
+                <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-1.1 3.3-3.4 5.9-6 7.3l.1-.1 6.3 5.2C35.2 39.1 45 32.5 45 24c0-1.4-.1-2.8-.4-4.5z"/>
+              </svg>
+            </span>
+            <span>Continue with Google</span>
           </button>
-          <div class="note-box">
-            Trusted auth domain:
-            <strong>${escapeHtml(config.githubPagesOrigin)}</strong>
-            <br />
-            Neon Auth endpoint:
-            <strong>${escapeHtml(config.neonAuthUrl)}</strong>
-          </div>
-        </aside>
+        </div>
       </section>
     </main>
   `;

@@ -113,6 +113,11 @@ a {
   overflow: hidden;
 }
 
+.hero-card-simple {
+  max-width: 620px;
+  grid-template-columns: 1fr;
+}
+
 .hero-card::after {
   content: "";
   position: absolute;
@@ -207,7 +212,12 @@ a {
   gap: 18px;
   background:
     radial-gradient(circle at top, rgba(79, 124, 255, 0.08), transparent 30%),
-    rgba(255, 255, 255, 0.88);
+  rgba(255, 255, 255, 0.88);
+}
+
+.sign-in-card-simple {
+  padding: 24px;
+  gap: 14px;
 }
 
 .sign-in-card h2 {
@@ -263,6 +273,32 @@ a {
 .ghost-button:hover,
 .danger-button:hover {
   transform: translateY(-1px);
+}
+
+.google-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0.8rem 1.1rem;
+  border-radius: 12px;
+  background: #fff;
+  color: #111827;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+  font-weight: 700;
+}
+
+.google-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+.google-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
 }
 
 .layout {
@@ -911,6 +947,10 @@ mark {
 @media (max-width: 920px) {
   .hero-card {
     grid-template-columns: 1fr;
+  }
+
+  .hero-card-simple {
+    max-width: 100%;
   }
 
   .layout {
