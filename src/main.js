@@ -67,12 +67,57 @@ function navigate(hash) {
   }
 }
 
+function getRoute(hash = location.hash) {
+  const current = hash || "#signin";
+  if (current === "#" || current === "") {
+    return { name: "dashboard" };
+  }
+  if (current === "#signin") {
+    return { name: "signin" };
+  }
+  if (current === "#dashboard") {
+    return { name: "dashboard" };
+  }
+  if (current === "#accounts/new") {
+    return { name: "account-create" };
+  }
+  const editMatch = current.match(/^#accounts\/([^/]+)\/edit$/);
+  if (editMatch) {
+    return { name: "account-edit", accountId: decodeURIComponent(editMatch[1]) };
+  }
+  return { name: "dashboard" };
+}
+
+function isAccountEditorRoute(route = getRoute()) {
+  return route.name === "account-create" || route.name === "account-edit";
+}
+
+function openAccountEditor(accountId = null) {
+  state.modal = null;
+  if (accountId) {
+    state.selectedAccountId = accountId;
+    navigate(`#accounts/${encodeURIComponent(accountId)}/edit`);
+    return;
+  }
+  state.selectedAccountId = null;
+  navigate("#accounts/new");
+}
+
+function goToDashboard() {
+  state.modal = null;
+  navigate("#dashboard");
+}
+
 function syncRoute() {
-  if (!state.session && location.hash !== "#signin") {
+  const route = getRoute();
+  if (!state.session && route.name !== "signin") {
     navigate("#signin");
   }
-  if (state.session && location.hash === "#signin") {
+  if (state.session && route.name === "signin") {
     navigate("#dashboard");
+  }
+  if (state.session && route.name === "account-edit" && route.accountId) {
+    state.selectedAccountId = route.accountId;
   }
 }
 
@@ -107,12 +152,18 @@ async function refreshSession() {
       email: result.user?.email ?? "",
       avatarUrl: result.user?.image ?? result.user?.avatarUrl ?? ""
     };
-    await store.initialize(state.ownerId, profile);
-    const current = store.getOwner(state.ownerId);
-    if (!current.profile.displayName) {
-      store.updateProfile(state.ownerId, profile);
-    }
-    store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
+    void store.initialize(state.ownerId, profile)
+      .then(() => {
+        const current = store.getOwner(state.ownerId);
+        if (!current.profile.displayName) {
+          store.updateProfile(state.ownerId, profile);
+        }
+        store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
+        render();
+      })
+      .catch((error) => {
+        console.warn("Failed to hydrate Neon store.", error);
+      });
   }
   syncRoute();
 }
@@ -150,6 +201,33 @@ function closeModal() {
   state.modal = null;
   state.duplicateWarnings = [];
   render();
+}
+
+function renderSyncStatus(owner) {
+  const sync = owner?.sync ?? {};
+  const configured = Boolean(config.neonDataApiUrl);
+  if (!configured) {
+    return `
+      <div class="note-box">
+        Neon Data API is not configured. SocialX is running from the local browser cache only.
+      </div>
+    `;
+  }
+  if (sync.lastSyncError) {
+    return `
+      <div class="note-box">
+        <strong>Neon sync needs attention</strong><br />
+        ${escapeHtml(sync.lastSyncError)}
+      </div>
+    `;
+  }
+  const lastSyncLabel = sync.lastSyncAt ? formatRelative(sync.lastSyncAt) : "just now";
+  return `
+    <div class="note-box" style="background: rgba(112, 225, 166, 0.08); border-color: rgba(112, 225, 166, 0.16); color: #d8ffe8;">
+      <strong>Connected to Neon</strong><br />
+      Last sync ${escapeHtml(lastSyncLabel)}.
+    </div>
+  `;
 }
 
 function getDraftFromForm(form) {
@@ -195,7 +273,6 @@ async function evaluateDuplicates(form, ignoreId = null) {
   const draft = getDraftFromForm(form);
   const warnings = store.getDuplicateWarnings(state.ownerId, draft, ignoreId);
   state.duplicateWarnings = warnings;
-  render();
   return warnings;
 }
 
@@ -233,7 +310,8 @@ async function submitAccountForm(form, mode, accountId = null) {
     state.selectedAccountId = account.id;
     setToast("Account updated", `${account.label} was saved successfully.`, "success");
   }
-  closeModal();
+  state.modal = null;
+  goToDashboard();
   render();
 }
 
@@ -691,6 +769,227 @@ function renderTopbar(owner) {
   `;
 }
 
+function renderAccountForm(mode, account, owner) {
+  const allAccounts = owner.accounts.filter((entry) => !account || entry.id !== account.id);
+  const customRows =
+    mode === "edit" && account?.customFields.length
+      ? account.customFields
+      : [
+          {
+            field: { id: uid("field"), name: "", valueType: "text", visibility: "private", searchable: true },
+            valueText: ""
+          }
+        ];
+  const parentIds = new Set(account?.parents?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
+  const childIds = new Set(account?.children?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
+
+  return `
+    ${
+      state.duplicateWarnings.length
+        ? `<div class="note-box" style="margin-bottom: 14px;">
+            <strong>Possible duplicates</strong><br />
+            ${state.duplicateWarnings.map((warning) => `â€¢ ${escapeHtml(warning)}`).join("<br />")}
+          </div>`
+        : ""
+    }
+
+    <form id="accountForm">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Main email or Google email</label>
+          <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" />
+        </div>
+        <div class="form-field">
+          <label>Platform / type</label>
+          <select name="platform">
+            ${PLATFORM_OPTIONS.map((platform) => `<option value="${escapeHtml(platform)}" ${(account?.platform ?? "Google") === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Label / title</label>
+          <input name="label" placeholder="Primary Google, Steam main, PAG-IBIG account..." value="${escapeHtml(account?.label ?? "")}" />
+        </div>
+        <div class="form-field">
+          <label>Account type</label>
+          <input name="accountType" placeholder="personal, work, government, gaming..." value="${escapeHtml(account?.accountType ?? "")}" />
+        </div>
+        <div class="form-field">
+          <label>Username</label>
+          <input name="username" placeholder="@handle / account username" value="${escapeHtml(account?.username ?? "")}" />
+        </div>
+        <div class="form-field">
+          <label>Password or secret label</label>
+          <input name="secretValue" type="password" placeholder="Stored encrypted if provided" />
+        </div>
+        <div class="form-field">
+          <label>Status</label>
+          <select name="status">
+            ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${(account?.status ?? "active") === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Tags</label>
+          <input name="tags" placeholder="personal, finance, government" value="${escapeHtml((account?.tags ?? []).join(", "))}" />
+        </div>
+        <div class="form-field full">
+          <label>Notes</label>
+          <textarea name="notes" rows="4" placeholder="Context, recovery notes, linked email pattern...">${escapeHtml(account?.notes ?? "")}</textarea>
+        </div>
+        <div class="form-field full">
+          <label>Relationship type for links</label>
+          <select name="relationshipType">
+            ${RELATIONSHIP_TYPES.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-field full">
+          <label>Relationship notes</label>
+          <textarea name="relationshipNote" rows="2" placeholder="Optional note applied to the relationships created by this record."></textarea>
+        </div>
+      </div>
+
+      <div class="stack" style="margin-top: 16px;">
+        <div class="relationship-box">
+          <h3 class="section-title">Parent links</h3>
+          <div class="scroll-list">
+            ${allAccounts
+              .map(
+                (entry) => `
+                  <label class="linked-item">
+                    <input type="checkbox" name="parentIds" value="${escapeHtml(entry.id)}" ${parentIds.has(entry.id) ? "checked" : ""} />
+                    <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
+                    <span class="badge">${escapeHtml(entry.status)}</span>
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
+
+        <div class="relationship-box">
+          <h3 class="section-title">Child links</h3>
+          <div class="scroll-list">
+            ${allAccounts
+              .map(
+                (entry) => `
+                  <label class="linked-item">
+                    <input type="checkbox" name="childIds" value="${escapeHtml(entry.id)}" ${childIds.has(entry.id) ? "checked" : ""} />
+                    <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
+                    <span class="badge">${escapeHtml(entry.status)}</span>
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
+
+        <div class="custom-field-box">
+          <div class="list-toolbar">
+            <h3 class="section-title">Custom fields</h3>
+            <button class="ghost-button" type="button" data-action="add-custom-field-row">Add custom field</button>
+          </div>
+          <div class="custom-field-list" id="customFieldList">
+            ${
+              customRows
+                .map(
+                  (row) => `
+                    <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(row.field?.id ?? row.fieldId ?? "")}">
+                      <input name="customFieldName" placeholder="Field name" value="${escapeHtml(row.field?.name ?? row.name ?? "")}" />
+                      <input name="customFieldValue" placeholder="Field value" value="${escapeHtml(row.valueText ?? "")}" />
+                      <select name="customFieldType">
+                        <option value="text" ${escapeHtml(row.field?.valueType ?? "text") === "text" ? "selected" : ""}>text</option>
+                        <option value="number" ${escapeHtml(row.field?.valueType ?? "text") === "number" ? "selected" : ""}>number</option>
+                        <option value="boolean" ${escapeHtml(row.field?.valueType ?? "text") === "boolean" ? "selected" : ""}>boolean</option>
+                        <option value="json" ${escapeHtml(row.field?.valueType ?? "text") === "json" ? "selected" : ""}>json</option>
+                        <option value="secret" ${escapeHtml(row.field?.valueType ?? "text") === "secret" ? "selected" : ""}>secret</option>
+                      </select>
+                      <select name="customFieldVisibility">
+                        ${FIELD_VISIBILITY.map((visibility) => `<option value="${escapeHtml(visibility)}" ${(row.field?.visibility ?? "private") === visibility ? "selected" : ""}>${escapeHtml(visibility)}</option>`).join("")}
+                      </select>
+                      <label class="checkbox-row">
+                        <input name="customFieldSearchable" type="checkbox" ${row.field?.searchable === false ? "" : "checked"} />
+                        <span>Searchable</span>
+                      </label>
+                      <button class="danger-button" type="button" data-action="remove-custom-field-row">Remove</button>
+                    </div>
+                  `
+                )
+                .join("")
+            }
+          </div>
+        </div>
+
+        <div class="checkbox-row">
+          <label class="checkbox-row"><input type="checkbox" name="favorite" ${account?.favorite ? "checked" : ""} /><span>Favorite</span></label>
+          <label class="checkbox-row"><input type="checkbox" name="archived" ${account?.archived ? "checked" : ""} /><span>Archived</span></label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-action="go-dashboard">Cancel</button>
+        <button class="primary-button" type="submit">${mode === "edit" ? "Save changes" : "Create account"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderAccountEditorWorkspace(owner) {
+  const route = getRoute();
+  const mode = route.name === "account-edit" ? "edit" : "create";
+  const account = mode === "edit" ? store.getAccount(state.ownerId, route.accountId) : null;
+  const title = mode === "edit" ? `Edit ${account?.label ?? "account"}` : "Add account";
+  if (mode === "edit" && !account) {
+    return `
+      <section class="workspace">
+        <div class="panel list-panel editor-panel">
+          <div class="list-toolbar">
+            <div>
+              <div class="section-title">Account not found</div>
+              <div class="meta-line">The route points to a record that does not exist in your current vault.</div>
+            </div>
+            <div class="inline-actions">
+              <button class="secondary-button" type="button" data-action="go-dashboard">Back to dashboard</button>
+            </div>
+          </div>
+          ${renderSyncStatus(owner)}
+        </div>
+        ${renderAccountDetails(owner)}
+      </section>
+    `;
+  }
+  return `
+    <section class="workspace">
+      <div class="panel list-panel editor-panel">
+        <div class="list-toolbar">
+          <div>
+            <div class="section-title">${escapeHtml(title)}</div>
+            <div class="meta-line">This route replaces the modal so account creation stays on its own page.</div>
+          </div>
+          <div class="inline-actions">
+            <button class="secondary-button" type="button" data-action="go-dashboard">Back to dashboard</button>
+          </div>
+        </div>
+        ${renderAccountForm(mode, account, owner)}
+      </div>
+      ${renderAccountDetails(owner)}
+    </section>
+  `;
+}
+
+function updateSearchView() {
+  const owner = currentOwnerState();
+  if (!owner) return;
+
+  const visibleCount = app.querySelector('[data-region="visible-count"]');
+  if (visibleCount) {
+    visibleCount.textContent = `${currentAccounts().length} visible records from ${owner.accounts.length} total accounts`;
+  }
+
+  const listRegion = app.querySelector('[data-region="account-list"]');
+  if (listRegion) {
+    listRegion.innerHTML = renderAccountList(owner);
+  }
+}
+
 function renderModal() {
   if (!state.modal || !state.ownerId) return "";
   const owner = currentOwnerState();
@@ -927,8 +1226,6 @@ function renderDashboard() {
   if (!owner) {
     return renderSignIn();
   }
-  const list = renderAccountList(owner);
-  const details = renderAccountDetails(owner);
   return `
     <div class="app-shell">
       <div class="layout">
@@ -936,22 +1233,27 @@ function renderDashboard() {
         <main class="content">
           ${renderTopbar(owner)}
           ${renderSummary(owner)}
-          <section class="workspace">
-            <div class="panel list-panel">
-              <div class="list-toolbar">
-                <div>
-                  <div class="section-title">Accounts</div>
-                  <div class="meta-line">${currentAccounts().length} visible records from ${owner.accounts.length} total accounts</div>
+          ${renderSyncStatus(owner)}
+          ${isAccountEditorRoute() ? renderAccountEditorWorkspace(owner) : `
+            <section class="workspace">
+              <div class="panel list-panel">
+                <div class="list-toolbar">
+                  <div>
+                    <div class="section-title">Accounts</div>
+                    <div class="meta-line">
+                      <span data-region="visible-count">${currentAccounts().length} visible records from ${owner.accounts.length} total accounts</span>
+                    </div>
+                  </div>
+                  <div class="inline-actions">
+                    <button class="secondary-button" type="button" data-action="open-settings">Settings</button>
+                    <button class="primary-button" type="button" data-action="open-create">Add account</button>
+                  </div>
                 </div>
-                <div class="inline-actions">
-                  <button class="secondary-button" type="button" data-action="open-settings">Settings</button>
-                  <button class="primary-button" type="button" data-action="open-create">Add account</button>
-                </div>
+                <div data-region="account-list">${renderAccountList(owner)}</div>
               </div>
-              ${list}
-            </div>
-            ${details}
-          </section>
+              ${renderAccountDetails(owner)}
+            </section>
+          `}
         </main>
       </div>
     </div>
@@ -992,9 +1294,7 @@ function render() {
   }
 
   app.innerHTML = renderDashboard();
-  if (state.modal?.mode === "create" || state.modal?.mode === "edit") {
-    app.insertAdjacentHTML("beforeend", renderModal());
-  } else if (state.modal?.mode === "import") {
+  if (state.modal?.mode === "import") {
     app.insertAdjacentHTML("beforeend", renderImportModal());
   } else if (state.modal?.mode === "export") {
     app.insertAdjacentHTML("beforeend", renderExportModal(state.modal.snapshot ?? {}));
@@ -1080,10 +1380,10 @@ function bindGlobalEvents() {
         render();
         break;
       case "open-create":
-        openModal({ mode: "create" });
+        openAccountEditor();
         break;
       case "open-edit":
-        openModal({ mode: "edit", accountId: id });
+        openAccountEditor(id);
         break;
       case "open-import":
         openModal({ mode: "import" });
@@ -1096,6 +1396,11 @@ function bindGlobalEvents() {
         break;
       case "close-modal":
         closeModal();
+        break;
+      case "go-dashboard":
+        state.modal = null;
+        goToDashboard();
+        render();
         break;
       case "copy-text":
         copyText(value, label || "text");
@@ -1209,7 +1514,7 @@ function bindGlobalEvents() {
 
     if (action === "search") {
       state.search = target.value;
-      render();
+      updateSearchView();
     }
     if (action === "filter-platform") {
       state.filters.platform = target.value;
@@ -1237,7 +1542,7 @@ function bindGlobalEvents() {
     }
     if (action === "filter-tag") {
       state.filters.tag = target.value;
-      render();
+      updateSearchView();
     }
   });
 
@@ -1246,11 +1551,14 @@ function bindGlobalEvents() {
     if (!(form instanceof HTMLFormElement)) return;
     if (form.id === "accountForm") {
       event.preventDefault();
-      const warnings = await evaluateDuplicates(form, state.modal?.accountId ?? null);
+      const route = getRoute();
+      const editorAccountId = route.name === "account-edit" ? route.accountId : null;
+      const mode = route.name === "account-edit" ? "edit" : "create";
+      const warnings = await evaluateDuplicates(form, editorAccountId ?? null);
       if (warnings.length && !confirm("Possible duplicates were found. Save anyway?")) {
         return;
       }
-      await submitAccountForm(form, state.modal?.mode ?? "create", state.modal?.accountId ?? null);
+      await submitAccountForm(form, mode, editorAccountId ?? null);
     }
     if (form.id === "importForm") {
       event.preventDefault();
@@ -1294,13 +1602,17 @@ function bindGlobalEvents() {
     if (target.matches("[data-custom-field-row] input, [data-custom-field-row] select")) {
       const form = target.closest("form");
       if (form) {
-        await evaluateDuplicates(form, state.modal?.accountId ?? null);
+        const route = getRoute();
+        await evaluateDuplicates(form, route.name === "account-edit" ? route.accountId : null);
       }
       return;
     }
   });
 
-  window.addEventListener("hashchange", syncRoute);
+  window.addEventListener("hashchange", () => {
+    syncRoute();
+    render();
+  });
 }
 
 async function initialize() {

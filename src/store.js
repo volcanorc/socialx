@@ -421,7 +421,7 @@ export function createStore() {
       owner.activityLog = normalizeList(activityRows).map(rowToActivity);
       rewriteSearchIndex(owner);
       owner.sync = {
-        remoteEnabled: true,
+        remoteEnabled: Boolean(config.neonDataApiUrl),
         lastSyncAt: nowIso(),
         lastSyncError: null
       };
@@ -430,7 +430,7 @@ export function createStore() {
       const owner = getOwnerState(ownerId);
       owner.sync = {
         ...owner.sync,
-        remoteEnabled: false,
+        remoteEnabled: Boolean(config.neonDataApiUrl),
         lastSyncError: error?.message ?? String(error)
       };
       return null;
@@ -495,7 +495,7 @@ export function createStore() {
         }
 
         owner.sync = {
-          remoteEnabled: true,
+          remoteEnabled: Boolean(config.neonDataApiUrl),
           lastSyncAt: nowIso(),
           lastSyncError: null
         };
@@ -505,7 +505,7 @@ export function createStore() {
       } catch (error) {
         owner.sync = {
           ...owner.sync,
-          remoteEnabled: false,
+          remoteEnabled: Boolean(config.neonDataApiUrl),
           lastSyncError: error?.message ?? String(error)
         };
         saveLocalSnapshot();
@@ -551,7 +551,7 @@ export function createStore() {
       };
       owner.sync = {
         ...owner.sync,
-        remoteEnabled: Boolean(config.neonDataApiUrl) && Boolean(remoteOwner)
+        remoteEnabled: Boolean(config.neonDataApiUrl)
       };
       owners.set(ownerId, owner);
       saveLocalSnapshot();
