@@ -92,6 +92,129 @@ function renderCustomFieldRow(row = {}, options = {}) {
   `;
 }
 
+function platformInitial(platform = "") {
+  const normalized = normalizeText(platform);
+  if (normalized.includes("google")) return "G";
+  if (normalized.includes("facebook")) return "f";
+  if (normalized.includes("instagram")) return "IG";
+  if (normalized.includes("tiktok")) return "TT";
+  if (normalized.includes("discord")) return "D";
+  if (normalized.includes("steam")) return "S";
+  if (normalized.includes("riot")) return "R";
+  if (normalized.includes("epic")) return "E";
+  if (normalized.includes("paypal")) return "P";
+  if (normalized.includes("bank")) return "B";
+  if (normalized.includes("government")) return "ID";
+  if (normalized.includes("x")) return "X";
+  return String(platform || "?").slice(0, 2).toUpperCase();
+}
+
+function platformTone(platform = "") {
+  const normalized = normalizeText(platform);
+  if (normalized.includes("google")) return "google";
+  if (normalized.includes("facebook")) return "facebook";
+  if (normalized.includes("instagram")) return "instagram";
+  if (normalized.includes("tiktok")) return "tiktok";
+  if (normalized.includes("discord")) return "discord";
+  if (normalized.includes("steam")) return "steam";
+  if (normalized.includes("riot")) return "riot";
+  if (normalized.includes("epic")) return "epic";
+  if (normalized.includes("paypal")) return "paypal";
+  if (normalized.includes("bank")) return "bank";
+  if (normalized.includes("government")) return "government";
+  return "custom";
+}
+
+function renderPlatformIcon(platform = "") {
+  if (normalizeText(platform).includes("google")) {
+    return `
+      <span class="platform-icon platform-google" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="14" height="14" role="img" focusable="false">
+          <path fill="#4285F4" d="M21.35 11.1H12v2.97h5.34c-.23 1.38-1.42 4.03-5.34 4.03A5.95 5.95 0 0 1 6 12a5.95 5.95 0 0 1 6-6c1.7 0 2.84.72 3.49 1.34l2.38-2.29C16.42 3.63 14.4 2.75 12 2.75 6.9 2.75 2.75 6.9 2.75 12S6.9 21.25 12 21.25c5.32 0 8.84-3.74 8.84-9 0-.6-.06-1.05-.16-1.15z"/>
+        </svg>
+      </span>
+    `;
+  }
+
+  return `<span class="platform-icon platform-${escapeHtml(platformTone(platform))}" aria-hidden="true">${escapeHtml(platformInitial(platform))}</span>`;
+}
+
+function accountDisplayName(account) {
+  return account?.label || account?.mainEmail || account?.platform || "Account";
+}
+
+function getGoogleAnchorAccount(owner, account) {
+  if (!owner || !account) return null;
+  const relation = owner.accountRelationships.find(
+    (entry) => entry.childAccountId === account.id && entry.relationshipType === "anchor"
+  );
+  if (!relation) return null;
+  return owner.accounts.find((entry) => entry.id === relation.parentAccountId && entry.platform === "Google") ?? null;
+}
+
+function getLinkedAccountsForDisplay(owner, account) {
+  if (!owner || !account) return [];
+
+  if (account.platform === "Google") {
+    const seen = new Set();
+    return owner.accountRelationships
+      .filter((relation) => relation.parentAccountId === account.id)
+      .map((relation) => owner.accounts.find((entry) => entry.id === relation.childAccountId))
+      .filter((entry) => entry && entry.platform !== "Google")
+      .filter((entry) => {
+        const key = normalizeText(entry.platform);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  const anchor = getGoogleAnchorAccount(owner, account);
+  return anchor ? [anchor] : [];
+}
+
+function renderLinkedAccountChip(owner, linkedAccount, options = {}) {
+  if (!linkedAccount) return "";
+  const secondary = options.secondary ?? linkedAccount.mainEmail ?? "";
+  const primary = options.primary ?? accountDisplayName(linkedAccount);
+  const chipTitle = options.title ?? `${linkedAccount.platform}: ${primary}`;
+  return `
+    <button
+      type="button"
+      class="linked-chip"
+      data-action="select-account"
+      data-id="${escapeHtml(linkedAccount.id)}"
+      title="${escapeHtml(chipTitle)}"
+      aria-label="${escapeHtml(chipTitle)}"
+    >
+      ${renderPlatformIcon(linkedAccount.platform)}
+      <span class="linked-chip-copy">
+        <strong>${escapeHtml(linkedAccount.platform)}</strong>
+        <span>${escapeHtml(primary)}${secondary ? ` <span class="linked-chip-secondary">· ${escapeHtml(secondary)}</span>` : ""}</span>
+      </span>
+    </button>
+  `;
+}
+
+function renderLinkedAccountSection(owner, account, options = {}) {
+  const linkedAccounts = getLinkedAccountsForDisplay(owner, account);
+  if (!linkedAccounts.length) return "";
+  const title = options.title ?? (account.platform === "Google" ? "Linked accounts" : "Linked to Google");
+  const limit = options.limit ?? linkedAccounts.length;
+  const chips = linkedAccounts.slice(0, limit).map((linkedAccount) => renderLinkedAccountChip(owner, linkedAccount)).join("");
+  const extraCount = linkedAccounts.length > limit ? linkedAccounts.length - limit : 0;
+
+  return `
+    <div class="linked-section">
+      <div class="section-title">${escapeHtml(title)}</div>
+      <div class="linked-chip-row">
+        ${chips}
+        ${extraCount ? `<span class="linked-chip-more">+${extraCount} more</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 function syncAccountFormLinkState(form) {
   if (!(form instanceof HTMLFormElement)) return;
   const linkMode = form.querySelector('[name="linkMode"]');
@@ -512,9 +635,6 @@ function renderFilters(owner) {
 
 function renderAccountCard(account, query) {
   const owner = currentOwnerState();
-  const relationships = owner?.accountRelationships ?? [];
-  const parents = relationships.filter((relation) => relation.childAccountId === account.id);
-  const children = relationships.filter((relation) => relation.parentAccountId === account.id);
   const customFields = owner?.customFieldValues
     ?.filter((value) => value.accountId === account.id)
     .map((value) => ({
@@ -549,22 +669,7 @@ function renderAccountCard(account, query) {
       <div class="account-preview">
         <div class="meta-line">${highlightMatch(account.username || "No username", query)}</div>
         <div class="meta-line">${highlightMatch(notesPreview, query)}</div>
-        <div class="badge-row">
-          ${parents
-            .slice(0, 2)
-            .map((relation) => {
-              const linked = owner?.accounts.find((candidate) => candidate.id === relation.parentAccountId);
-              return linked ? `<span class="badge">Parent: ${escapeHtml(linked.label)}</span>` : "";
-            })
-            .join("")}
-          ${children
-            .slice(0, 2)
-            .map((relation) => {
-              const linked = owner?.accounts.find((candidate) => candidate.id === relation.childAccountId);
-              return linked ? `<span class="badge">Child: ${escapeHtml(linked.label)}</span>` : "";
-            })
-            .join("")}
-        </div>
+        ${renderLinkedAccountSection(owner, account, { limit: 3 })}
         <div class="badge-row">
           ${customFields
             .slice(0, 3)
@@ -588,8 +693,8 @@ function renderAccountList(owner) {
       <div class="empty-state">
         <h3>No accounts match your current filters.</h3>
         <p>
-          Try clearing a filter or add a new account. SocialX supports dynamic custom fields, linked parents,
-          child accounts, and archive-first organization.
+          Try clearing a filter or add a new account. SocialX keeps linked accounts, custom fields, and archive-first
+          organization simple to browse.
         </p>
         <button class="primary-button" type="button" data-action="open-create">Add account</button>
       </div>
@@ -639,6 +744,7 @@ function renderAccountDetails(owner) {
         <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
         <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
       </div>
+      ${renderLinkedAccountSection(owner, enriched, { title: enriched.platform === "Google" ? "Linked accounts" : "Linked to Google" })}
     </div>
   `;
 }
