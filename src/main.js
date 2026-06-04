@@ -341,7 +341,7 @@ function renderSignIn() {
       <section class="hero-card hero-card-simple">
         <div class="sign-in-card sign-in-card-simple">
           <div class="brand">
-            <div class="brand-mark">Sx</div>
+            <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
             <div class="brand-title">
               <strong>${escapeHtml(config.appName)}</strong>
               <span>Simple account organizer</span>
@@ -577,7 +577,7 @@ function renderTopbar(owner) {
   return `
     <header class="topbar">
       <div class="topbar-left">
-        <div class="brand-mark">Sx</div>
+        <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
         <div>
           <div class="title">${escapeHtml(config.appName)}</div>
           <div class="meta-line">${escapeHtml(state.session?.user?.email ?? "Signed in")}</div>
@@ -1178,7 +1178,7 @@ function render() {
         <section class="hero-card">
           <div class="hero-copy">
             <div class="brand">
-              <div class="brand-mark">Sx</div>
+              <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
               <div class="brand-title">
                 <strong>${escapeHtml(config.appName)}</strong>
                 <span>Loading secure auth and vault state</span>

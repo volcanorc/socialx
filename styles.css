@@ -139,13 +139,12 @@ a {
 .brand-mark {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  color: #03131b;
-  background: linear-gradient(135deg, var(--accent), #b0f5e6);
-  box-shadow: 0 10px 30px rgba(97, 215, 199, 0.24);
+  border-radius: 12px;
+  display: block;
+  object-fit: cover;
+  background: #000;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
+  flex: 0 0 auto;
 }
 
 .brand-title {
