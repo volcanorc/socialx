@@ -1,7 +1,10 @@
 import { config, getAppOrigin } from "./config.js";
 import {
   FIELD_VISIBILITY,
-  PLATFORM_OPTIONS,
+  getPlatformOptionsForCategory,
+  normalizePlatformCategory,
+  PLATFORM_CATEGORY_LABELS,
+  PLATFORM_CATEGORY_ORDER,
   RELATIONSHIP_TYPES,
   STATUS_OPTIONS,
   escapeHtml,
@@ -67,26 +70,26 @@ function renderProfileCircle(user, fallbackText = "U", className = "avatar") {
 function renderCustomFieldRow(row = {}, options = {}) {
   const field = row.field ?? {};
   const rowId = row.fieldId ?? field.id ?? "";
-  const valueType = row.valueType ?? field.valueType ?? "text";
   const visibility = row.visibility ?? field.visibility ?? "masked";
-  const searchable = row.searchable ?? field.searchable ?? true;
   const name = row.field?.name ?? row.name ?? "";
   const value = row.valueText ?? "";
   const removeLabel = options.removeLabel ?? "Cancel custom field";
 
   return `
-    <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(rowId)}" data-value-type="${escapeHtml(valueType)}">
-      <input name="customFieldName" placeholder="Field name" value="${escapeHtml(name)}" />
-      <input name="customFieldValue" placeholder="Field value" value="${escapeHtml(value)}" />
-      <select name="customFieldVisibility">
+    <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(rowId)}">
+      <label class="custom-field-label">
+        <span>Name</span>
+        <input name="customFieldName" value="${escapeHtml(name)}" />
+      </label>
+      <label class="custom-field-label">
+        <span>Value</span>
+        <input name="customFieldValue" value="${escapeHtml(value)}" />
+      </label>
+      <select name="customFieldVisibility" aria-label="Custom field visibility">
         <option value="private" ${visibility === "private" ? "selected" : ""}>private</option>
         <option value="public" ${visibility === "public" ? "selected" : ""}>public</option>
         <option value="masked" ${visibility === "masked" ? "selected" : ""}>masked</option>
       </select>
-      <label class="checkbox-row">
-        <input name="customFieldSearchable" type="checkbox" ${searchable === false ? "" : "checked"} />
-        <span>Searchable</span>
-      </label>
       <button class="secondary-button" type="button" data-action="remove-custom-field-row">${escapeHtml(removeLabel)}</button>
     </div>
   `;
@@ -143,6 +146,31 @@ function accountDisplayName(account) {
   return account?.label || account?.mainEmail || account?.platform || "Account";
 }
 
+function getPlatformCategoryForPlatform(platform = "", owner = null) {
+  const normalized = normalizeText(platform);
+  if (["paypal", "coins.ph", "gcash", "maya", "bdo", "gotyme", "atome", "bank"].some((entry) => normalized.includes(normalizeText(entry)))) {
+    return "bank";
+  }
+  if (["tin", "pagibig", "philhealth", "nbi", "philsys", "egovph", "pnp", "government", "id"].some((entry) => normalized.includes(normalizeText(entry)))) {
+    return "government";
+  }
+  const customPlatforms = owner?.settings?.customPlatforms ?? {};
+  for (const category of PLATFORM_CATEGORY_ORDER) {
+    const entries = Array.isArray(customPlatforms[category]) ? customPlatforms[category] : [];
+    if (entries.some((entry) => normalizeText(entry) === normalized)) {
+      return category;
+    }
+  }
+  return "social";
+}
+
+function buildPlatformOptions(owner, category, { linkedGoogleMode = false } = {}) {
+  const custom = owner?.settings?.customPlatforms?.[category] ?? [];
+  const options = getPlatformOptionsForCategory(category, custom);
+  const filtered = linkedGoogleMode ? options.filter((platform) => normalizeText(platform) !== normalizeText("Google")) : options;
+  return [...filtered, "Custom"];
+}
+
 function getGoogleAnchorAccount(owner, account) {
   if (!owner || !account) return null;
   const relation = owner.accountRelationships.find(
@@ -175,9 +203,10 @@ function getLinkedAccountsForDisplay(owner, account) {
 
 function renderLinkedAccountChip(owner, linkedAccount, options = {}) {
   if (!linkedAccount) return "";
-  const secondary = options.secondary ?? linkedAccount.mainEmail ?? "";
+  const secondary = options.secondary ?? "";
   const primary = options.primary ?? accountDisplayName(linkedAccount);
   const chipTitle = options.title ?? `${linkedAccount.platform}: ${primary}`;
+  const showCopy = secondary || normalizeText(primary) !== normalizeText(linkedAccount.platform);
   return `
     <button
       type="button"
@@ -190,7 +219,7 @@ function renderLinkedAccountChip(owner, linkedAccount, options = {}) {
       ${renderPlatformIcon(linkedAccount.platform)}
       <span class="linked-chip-copy">
         <strong>${escapeHtml(linkedAccount.platform)}</strong>
-        <span>${escapeHtml(primary)}${secondary ? ` <span class="linked-chip-secondary">· ${escapeHtml(secondary)}</span>` : ""}</span>
+        ${showCopy ? `<span>${escapeHtml(primary)}${secondary ? ` <span class="linked-chip-secondary">- ${escapeHtml(secondary)}</span>` : ""}</span>` : ""}
       </span>
     </button>
   `;
@@ -199,9 +228,18 @@ function renderLinkedAccountChip(owner, linkedAccount, options = {}) {
 function renderLinkedAccountSection(owner, account, options = {}) {
   const linkedAccounts = getLinkedAccountsForDisplay(owner, account);
   if (!linkedAccounts.length) return "";
-  const title = options.title ?? (account.platform === "Google" ? "Linked accounts" : "Linked to Google");
+  const title = options.title ?? (account.platform === "Google" ? "Linked accounts" : "Linked to");
   const limit = options.limit ?? linkedAccounts.length;
-  const chips = linkedAccounts.slice(0, limit).map((linkedAccount) => renderLinkedAccountChip(owner, linkedAccount)).join("");
+  const chips = linkedAccounts
+    .slice(0, limit)
+    .map((linkedAccount) => {
+      const isGoogleAnchorView = normalizeText(account.platform).includes("google");
+      return renderLinkedAccountChip(owner, linkedAccount, {
+        primary: isGoogleAnchorView ? (linkedAccount.label || linkedAccount.platform) : accountDisplayName(linkedAccount),
+        secondary: ""
+      });
+    })
+    .join("");
   const extraCount = linkedAccounts.length > limit ? linkedAccounts.length - limit : 0;
 
   return `
@@ -245,6 +283,62 @@ function syncAccountFormLinkState(form) {
 
     const linkedAccount = owner.accounts.find((account) => account.id === anchorSelect.value);
     mainEmail.value = linkedAccount?.mainEmail || "";
+  }
+}
+
+function syncAccountFormPlatformState(form) {
+  if (!(form instanceof HTMLFormElement)) return;
+  const categoryInput = form.querySelector('[name="platformCategory"]');
+  const platformSelect = form.querySelector('select[name="platform"]');
+  const categoryButtons = [...form.querySelectorAll("[data-platform-category-button]")];
+  const customGroup = form.querySelector("[data-custom-platform-field]");
+  const label = form.querySelector("[data-platform-label]");
+  const owner = currentOwnerState();
+  if (!categoryInput || !platformSelect || !categoryButtons.length || !customGroup || !label || !owner) return;
+
+  const activeCategory = normalizePlatformCategory(categoryInput.value || "social");
+  const linkMode = form.querySelector('[name="linkMode"]')?.value === "linkedGoogle";
+  const previousValue = platformSelect.value;
+  const selectionKey = `platformSelection${activeCategory[0].toUpperCase()}${activeCategory.slice(1)}`;
+  const storedValue = form.dataset[selectionKey] ?? "";
+
+  categoryInput.value = activeCategory;
+  label.textContent = `${PLATFORM_CATEGORY_LABELS[activeCategory]} platform`;
+
+  for (const button of categoryButtons) {
+    const active = normalizePlatformCategory(button.dataset.value || "social") === activeCategory;
+    button.classList.toggle("is-active", active);
+  }
+
+  const options = buildPlatformOptions(owner, activeCategory, { linkedGoogleMode: linkMode });
+  const rememberedValue = storedValue || previousValue || options[0] || "";
+  const filteredValue = linkMode && normalizeText(rememberedValue) === normalizeText("Google")
+    ? (options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? "")
+    : rememberedValue;
+  const nextValue = options.some((option) => normalizeText(option) === normalizeText(filteredValue))
+    ? filteredValue
+    : (options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? "");
+
+  platformSelect.innerHTML = options
+    .map((platform) => {
+      const selected = normalizeText(nextValue) === normalizeText(platform);
+      const hidden = linkMode && normalizeText(platform) === normalizeText("Google");
+      return `<option value="${escapeHtml(platform)}" ${hidden ? "hidden disabled" : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
+    })
+    .join("");
+
+  platformSelect.disabled = false;
+  platformSelect.value = nextValue;
+  form.dataset[selectionKey] = nextValue;
+
+  const customName = form.querySelector('[name="customPlatformName"]');
+  const customVisible = normalizeText(nextValue) === normalizeText("Custom");
+  customGroup.classList.toggle("is-hidden", !customVisible);
+  if (customName) {
+    customName.disabled = !customVisible;
+    if (!customVisible && !customName.value.trim()) {
+      customName.value = "";
+    }
   }
 }
 
@@ -435,30 +529,25 @@ function renderSyncStatus(owner) {
 
 function getDraftFromForm(form) {
   const formData = new FormData(form);
-  const tags = String(formData.get("tags") ?? "")
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-
   const customFields = [...form.querySelectorAll("[data-custom-field-row]")].map((row) => ({
     fieldId: row.dataset.fieldId || "",
-    valueType: row.dataset.valueType || "text",
+    valueType: "text",
     name: row.querySelector('[name="customFieldName"]')?.value ?? "",
     valueText: row.querySelector('[name="customFieldValue"]')?.value ?? "",
-    visibility: row.querySelector('[name="customFieldVisibility"]')?.value ?? "masked",
-    searchable: row.querySelector('[name="customFieldSearchable"]')?.checked ?? true
+    visibility: row.querySelector('[name="customFieldVisibility"]')?.value ?? "masked"
   }));
 
   return {
     linkMode: formData.get("linkMode")?.toString() ?? "separate",
     anchorAccountId: formData.get("anchorAccountId")?.toString() ?? "",
-    platform: formData.get("platform")?.toString() ?? "Custom",
+    platformCategory: formData.get("platformCategory")?.toString() ?? "social",
+    platform: formData.get("platform")?.toString() ?? "Google",
+    customPlatformName: formData.get("customPlatformName")?.toString() ?? "",
     mainEmail: formData.get("mainEmail")?.toString() ?? "",
     username: formData.get("username")?.toString() ?? "",
     secretValue: formData.get("secretValue")?.toString() ?? "",
     status: formData.get("status")?.toString() ?? "active",
     notes: formData.get("notes")?.toString() ?? "",
-    tags,
     customFields
   };
 }
@@ -478,6 +567,16 @@ async function submitAccountForm(form, mode, accountId = null) {
     setToast("Choose a Google account", "Linked accounts need an existing Google anchor.", "danger");
     return;
   }
+  const platform = normalizeText(draft.platform) === normalizeText("Custom")
+    ? draft.customPlatformName.trim()
+    : draft.platform.trim();
+  if (!platform) {
+    setToast("Choose a platform", "Every account needs a platform name.", "danger");
+    return;
+  }
+  if (normalizeText(draft.platform) === normalizeText("Custom")) {
+    store.addCustomPlatform(state.ownerId, draft.platformCategory, platform);
+  }
   const secretRecord = draft.secretValue
     ? await encryptSecret(draft.secretValue, state.passphrase || "")
     : null;
@@ -496,6 +595,7 @@ async function submitAccountForm(form, mode, accountId = null) {
   );
   const payload = {
     ...draft,
+    platform,
     secretRecord,
     customFields
   };
@@ -587,8 +687,6 @@ function renderSummary(owner) {
 
 function renderFilters(owner) {
   const platformSet = [...new Set(owner.accounts.map((account) => account.platform))].sort();
-  const tags = [...new Set(owner.accounts.flatMap((account) => account.tags ?? []))].sort();
-  const linkedOptions = owner.accounts;
   return `
     <section class="filter-bar">
       <div class="filter-group">
@@ -600,20 +698,6 @@ function renderFilters(owner) {
           <option value="all">All statuses</option>
           ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${state.filters.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
         </select>
-        <select data-action="filter-archived">
-          <option value="active" ${state.filters.archived === "active" ? "selected" : ""}>Active</option>
-          <option value="archived" ${state.filters.archived === "archived" ? "selected" : ""}>Archived</option>
-          <option value="all" ${state.filters.archived === "all" ? "selected" : ""}>All</option>
-        </select>
-        <select data-action="filter-favorite">
-          <option value="all" ${state.filters.favorite === "all" ? "selected" : ""}>All favorites</option>
-          <option value="favorite" ${state.filters.favorite === "favorite" ? "selected" : ""}>Favorites</option>
-          <option value="normal" ${state.filters.favorite === "normal" ? "selected" : ""}>Not favorites</option>
-        </select>
-        <select data-action="filter-linked">
-          <option value="all">All linked identities</option>
-          ${linkedOptions.map((account) => `<option value="${escapeHtml(account.id)}" ${state.filters.linkedTo === account.id ? "selected" : ""}>${escapeHtml(account.label)}</option>`).join("")}
-        </select>
         <select data-action="filter-sort">
           <option value="updated_desc" ${state.filters.sort === "updated_desc" ? "selected" : ""}>Recently updated</option>
           <option value="newest" ${state.filters.sort === "newest" ? "selected" : ""}>Newest</option>
@@ -621,13 +705,6 @@ function renderFilters(owner) {
           <option value="status" ${state.filters.sort === "status" ? "selected" : ""}>Status</option>
           <option value="platform" ${state.filters.sort === "platform" ? "selected" : ""}>Platform</option>
         </select>
-        <input data-action="filter-tag" value="${escapeHtml(state.filters.tag)}" placeholder="Tag" />
-      </div>
-      <div class="filter-group chips">
-        ${renderChip("All", state.search === "" && state.filters.platform === "all", "preset-filter", "all")}
-        ${renderChip("Favorites", state.filters.favorite === "favorite", "preset-filter", "favorite")}
-        ${renderChip("Archived", state.filters.archived === "archived", "preset-filter", "archived")}
-        ${tags.map((tag) => renderChip(`#${tag}`, normalizeText(state.filters.tag) === normalizeText(tag), "tag-filter", tag)).join("")}
       </div>
     </section>
   `;
@@ -642,33 +719,26 @@ function renderAccountCard(account, query) {
       value
     }))
     .filter((entry) => entry.field) ?? [];
-  const notesPreview = account.notes ? account.notes.slice(0, 110) : "No notes yet.";
-  const badgeClass =
-    account.status === "active"
-      ? "good"
-      : account.status === "archived"
-        ? "warn"
-        : account.status === "locked"
-          ? "danger"
-          : "";
+  const linkedGoogle = account.platform === "Google" ? null : getGoogleAnchorAccount(owner, account);
+  const emailLine = account.mainEmail && !linkedGoogle ? `<span>${highlightMatch(account.mainEmail, query)}</span>` : "";
+  const usernameLine = account.username ? `<div class="meta-line">${highlightMatch(account.username, query)}</div>` : "";
+  const notesLine = account.notes ? `<div class="meta-line">${highlightMatch(account.notes.slice(0, 110), query)}</div>` : "";
 
   return `
     <article class="account-card ${state.selectedAccountId === account.id ? "is-selected" : ""}" data-action="select-account" data-id="${escapeHtml(account.id)}">
       <div class="account-card-header">
         <div class="account-title">
           <strong>${highlightMatch(account.label, query)}</strong>
-          <span>${highlightMatch(account.mainEmail || "No email on file", query)}</span>
+          ${emailLine}
         </div>
         <div class="badge-row">
           <span class="badge platform">${escapeHtml(account.platform)}</span>
-          <span class="badge ${badgeClass}">${escapeHtml(account.status)}</span>
-          ${account.favorite ? '<span class="badge good">Favorite</span>' : ""}
-          ${account.archived ? '<span class="badge warn">Archived</span>' : ""}
+          <span class="badge ${account.status === "active" ? "good" : account.status === "archived" ? "warn" : account.status === "locked" ? "danger" : ""}">${escapeHtml(account.status)}</span>
         </div>
       </div>
       <div class="account-preview">
-        <div class="meta-line">${highlightMatch(account.username || "No username", query)}</div>
-        <div class="meta-line">${highlightMatch(notesPreview, query)}</div>
+        ${usernameLine}
+        ${notesLine}
         ${renderLinkedAccountSection(owner, account, { limit: 3 })}
         <div class="badge-row">
           ${customFields
@@ -715,6 +785,14 @@ function renderAccountDetails(owner) {
 
   const enriched = store.getAccount(state.ownerId, account.id);
   const secretPreview = enriched.secretRecord ? "Encrypted" : "None";
+  const detailRows = [
+    enriched.mainEmail ? `<div class="kv"><div class="key">Main email</div><div class="val">${escapeHtml(enriched.mainEmail)}</div></div>` : "",
+    enriched.username ? `<div class="kv"><div class="key">Username</div><div class="val">${escapeHtml(enriched.username)}</div></div>` : "",
+    enriched.secretRecord ? `<div class="kv"><div class="key">Secret</div><div class="val">${escapeHtml(secretPreview)}</div></div>` : "",
+    `<div class="kv"><div class="key">Updated</div><div class="val">${escapeHtml(formatRelative(enriched.updatedAt))}</div></div>`
+  ]
+    .filter(Boolean)
+    .join("");
 
   return `
     <div class="drawer drawer-compact">
@@ -723,43 +801,41 @@ function renderAccountDetails(owner) {
           <div class="avatar">${escapeHtml(getInitials(enriched.label))}</div>
           <div>
             <h2>${escapeHtml(enriched.label)}</h2>
-            <div class="meta-line">${escapeHtml(enriched.platform)} · ${escapeHtml(enriched.status)}</div>
+            <div class="meta-line">${escapeHtml(enriched.platform)} - ${escapeHtml(enriched.status)}</div>
           </div>
         </div>
-        <div class="badge-row">
-          <span class="badge ${enriched.favorite ? "good" : ""}">${enriched.favorite ? "Favorite" : "Normal"}</span>
-          <span class="badge ${enriched.archived ? "warn" : "good"}">${enriched.archived ? "Archived" : "Active"}</span>
-        </div>
       </div>
-      <div class="drawer-grid compact">
-        <div class="kv"><div class="key">Main email</div><div class="val">${escapeHtml(enriched.mainEmail || "—")}</div></div>
-        <div class="kv"><div class="key">Username</div><div class="val">${escapeHtml(enriched.username || "—")}</div></div>
-        <div class="kv"><div class="key">Secret</div><div class="val">${escapeHtml(secretPreview)}</div></div>
-        <div class="kv"><div class="key">Updated</div><div class="val">${escapeHtml(formatRelative(enriched.updatedAt))}</div></div>
-      </div>
+      <div class="drawer-grid compact">${detailRows}</div>
+      ${enriched.notes ? `<div class="drawer-section"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
       <div class="inline-actions compact">
-        <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail || "")}" data-label="email">Copy email</button>
-        <button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username || "")}" data-label="username">Copy username</button>
+        ${enriched.mainEmail ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail)}" data-label="email">Copy email</button>` : ""}
+        ${enriched.username ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username)}" data-label="username">Copy username</button>` : ""}
         <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
         <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
         <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
       </div>
-      ${renderLinkedAccountSection(owner, enriched, { title: enriched.platform === "Google" ? "Linked accounts" : "Linked to Google" })}
+      ${renderLinkedAccountSection(owner, enriched, { title: enriched.platform === "Google" ? "Linked accounts" : "Linked to" })}
     </div>
   `;
 }
 
 function renderTopbar(owner) {
+
   return `
     <header class="topbar">
       <div class="topbar-left">
         <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
         <div>
           <div class="title">${escapeHtml(config.appName)}</div>
-          <div class="meta-line">${escapeHtml(state.session?.user?.email ?? "Signed in")}</div>
+          <div class="meta-line">Simple account organizer</div>
         </div>
       </div>
       <div class="search-wrap">
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" focusable="false">
+            <path fill="currentColor" d="M10 4a6 6 0 1 0 3.87 10.57l4.78 4.78 1.41-1.41-4.78-4.78A6 6 0 0 0 10 4Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"/>
+          </svg>
+        </span>
         <input
           class="search-input"
           type="search"
@@ -769,10 +845,11 @@ function renderTopbar(owner) {
         />
       </div>
       <div class="topbar-actions">
-        <button class="secondary-button" data-action="open-import">Import</button>
-        <button class="secondary-button" data-action="open-export">Export</button>
         <button class="primary-button" data-action="open-create">Add account</button>
-        ${renderProfileCircle(state.session?.user, "U", "avatar profile-avatar")}
+        <div class="profile-stack">
+          ${renderProfileCircle(state.session?.user, "U", "avatar profile-avatar")}
+          <span class="profile-email">${escapeHtml(state.session?.user?.email ?? "Signed in")}</span>
+        </div>
         <button class="ghost-button" data-action="sign-out">Sign out</button>
       </div>
     </header>
@@ -783,26 +860,31 @@ function renderAccountForm(mode, account, owner) {
   const linkedGoogle = account?.parents?.find((entry) => entry.account?.platform === "Google") ?? null;
   const linkMode = linkedGoogle ? "linkedGoogle" : "separate";
   const anchorAccountId = linkedGoogle?.account?.id ?? "";
-  const linkedGoogleAccounts = owner.accounts.filter(
-    (entry) => entry.platform === "Google" && (!account || entry.id !== account.id)
-  );
-  const selectedPlatform = linkMode === "linkedGoogle" && (account?.platform ?? "") === "Google" ? "Custom" : (account?.platform ?? (linkMode === "linkedGoogle" ? "Custom" : "Google"));
-  const customRows =
-    mode === "edit" && account?.customFields.length
-      ? account.customFields
-      : [
-          {
-            field: { id: uid("field"), name: "", valueType: "text", visibility: "masked", searchable: true },
-            valueText: ""
-          }
-        ];
+  const platformCategory = getPlatformCategoryForPlatform(account?.platform || "social", owner);
+  const categoryOptions = PLATFORM_CATEGORY_ORDER.map((key) => ({
+    key,
+    label: PLATFORM_CATEGORY_LABELS[key],
+    options: buildPlatformOptions(owner, key, { linkedGoogleMode: linkMode === "linkedGoogle" })
+  }));
+  const accountPlatform = account?.platform ?? "";
+  const activePlatformOptions = buildPlatformOptions(owner, platformCategory, { linkedGoogleMode: linkMode === "linkedGoogle" });
+  const knownPlatform = activePlatformOptions.some((option) => normalizeText(option) === normalizeText(accountPlatform));
+  const selectedPlatform = !accountPlatform
+    ? (linkMode === "linkedGoogle"
+        ? activePlatformOptions.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? activePlatformOptions[0] ?? "Facebook"
+        : activePlatformOptions[0] ?? "Google")
+    : knownPlatform
+      ? accountPlatform
+      : "Custom";
+  const customPlatformName = knownPlatform || !accountPlatform ? "" : accountPlatform;
+  const customRows = mode === "edit" && account?.customFields.length ? account.customFields : [];
 
   return `
     ${
       state.duplicateWarnings.length
         ? `<div class="note-box form-note">
             <strong>Possible duplicates</strong><br />
-            ${state.duplicateWarnings.map((warning) => `• ${escapeHtml(warning)}`).join("<br />")}
+            ${state.duplicateWarnings.map((warning) => `- ${escapeHtml(warning)}`).join("<br />")}
           </div>`
         : ""
     }
@@ -821,33 +903,58 @@ function renderAccountForm(mode, account, owner) {
           <label>Link to existing Google</label>
           <select name="anchorAccountId" data-action="anchor-google">
             <option value="">Choose Google account</option>
-            ${linkedGoogleAccounts
+            ${owner.accounts
+              .filter((entry) => entry.platform === "Google" && (!account || entry.id !== account.id))
               .map(
                 (entry) => `
                   <option value="${escapeHtml(entry.id)}" ${entry.id === anchorAccountId ? "selected" : ""}>
-                    ${escapeHtml(entry.label)}${entry.mainEmail ? ` · ${escapeHtml(entry.mainEmail)}` : ""}
+                    ${escapeHtml(entry.label)}${entry.mainEmail ? ` - ${escapeHtml(entry.mainEmail)}` : ""}
                   </option>
                 `
               )
               .join("")}
           </select>
-          <div class="meta-line">This account will be linked under the selected Google identity.</div>
         </div>
 
         <div class="form-field">
           <label>Main email or Google email</label>
           <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" ${linkMode === "linkedGoogle" ? "disabled" : ""} />
         </div>
-        <div class="form-field">
-          <label>Platform / type</label>
+
+        <div class="form-field full">
+          <label>Platform category</label>
+          <div class="category-toggle" data-platform-category-toggle>
+            ${categoryOptions
+              .map(
+                ({ key, label }) => `
+                  <button type="button" class="category-pill ${platformCategory === key ? "is-active" : ""}" data-action="set-platform-category" data-platform-category-button data-value="${escapeHtml(key)}">
+                    ${escapeHtml(label)}
+                  </button>
+                `
+              )
+              .join("")}
+          </div>
+          <input type="hidden" name="platformCategory" value="${escapeHtml(platformCategory)}" />
+        </div>
+
+        <div class="form-field full" data-platform-select-field>
+          <label data-platform-label>${escapeHtml(PLATFORM_CATEGORY_LABELS[platformCategory])} platform</label>
           <select name="platform" data-action="platform-select">
-            ${PLATFORM_OPTIONS.map((platform) => {
-              const hidden = linkMode === "linkedGoogle" && platform === "Google";
-              const selected = selectedPlatform === platform;
-              return `<option value="${escapeHtml(platform)}" ${hidden ? 'hidden disabled' : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
-            }).join("")}
+            ${activePlatformOptions
+              .map((platform) => {
+                const selected = normalizeText(selectedPlatform) === normalizeText(platform);
+                const hidden = linkMode === "linkedGoogle" && normalizeText(platform) === normalizeText("Google");
+                return `<option value="${escapeHtml(platform)}" ${hidden ? "hidden disabled" : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
+              })
+              .join("")}
           </select>
         </div>
+
+        <div class="form-field full ${normalizeText(selectedPlatform) === normalizeText("Custom") ? "" : "is-hidden"}" data-custom-platform-field>
+          <label>Custom platform</label>
+          <input name="customPlatformName" placeholder="Add your own platform" value="${escapeHtml(customPlatformName)}" />
+        </div>
+
         <div class="form-field">
           <label>Username</label>
           <input name="username" placeholder="@handle / account username" value="${escapeHtml(account?.username ?? "")}" />
@@ -862,10 +969,6 @@ function renderAccountForm(mode, account, owner) {
             ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${(account?.status ?? "active") === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
           </select>
         </div>
-        <div class="form-field">
-          <label>Tags</label>
-          <input name="tags" placeholder="personal, finance, government" value="${escapeHtml((account?.tags ?? []).join(", "))}" />
-        </div>
         <div class="form-field full">
           <label>Notes</label>
           <textarea name="notes" rows="4" placeholder="Context, recovery notes, linked email pattern...">${escapeHtml(account?.notes ?? "")}</textarea>
@@ -876,7 +979,7 @@ function renderAccountForm(mode, account, owner) {
             <h3 class="section-title">Custom fields</h3>
             <button class="ghost-button" type="button" data-action="add-custom-field-row">Add custom field</button>
           </div>
-          <div class="custom-field-list" id="customFieldList">
+          <div class="custom-field-list ${customRows.length ? "" : "is-hidden"}" id="customFieldList">
             ${customRows.map((row) => renderCustomFieldRow(row)).join("")}
           </div>
         </div>
@@ -1173,6 +1276,11 @@ function render() {
   }
 
   app.innerHTML = renderDashboard();
+  const accountForm = app.querySelector("#accountForm");
+  if (accountForm) {
+    syncAccountFormLinkState(accountForm);
+    syncAccountFormPlatformState(accountForm);
+  }
   if (state.modal?.mode === "settings") {
     const owner = currentOwnerState();
     app.insertAdjacentHTML(
@@ -1300,28 +1408,34 @@ function bindGlobalEvents() {
       case "select-account":
         setSelected(id);
         break;
-      case "preset-filter":
-        if (value === "all") {
-          state.filters.platform = "all";
-          state.filters.favorite = "all";
-          state.filters.archived = "active";
+      case "set-platform-category": {
+        const form = target.closest("form");
+        const categoryInput = form?.querySelector('[name="platformCategory"]');
+        const platformSelect = form?.querySelector('select[name="platform"]');
+        if (categoryInput) {
+          const previousCategory = normalizePlatformCategory(categoryInput.value || "social");
+          if (platformSelect) {
+            form.dataset[`platformSelection${previousCategory[0].toUpperCase()}${previousCategory.slice(1)}`] = platformSelect.value;
+          }
+          categoryInput.value = value || "social";
+          syncAccountFormPlatformState(form);
         }
-        if (value === "favorite") {
-          state.filters.favorite = "favorite";
-        }
-        if (value === "archived") {
-          state.filters.archived = "archived";
-        }
-        render();
         break;
-      case "tag-filter":
-        state.filters.tag = value;
-        render();
+      }
+      case "platform-select": {
+        const form = target.closest("form");
+        const category = normalizePlatformCategory(form?.querySelector('[name="platformCategory"]')?.value || "social");
+        if (form && target instanceof HTMLSelectElement) {
+          form.dataset[`platformSelection${category[0].toUpperCase()}${category.slice(1)}`] = target.value;
+        }
+        syncAccountFormPlatformState(form);
         break;
+      }
       case "add-custom-field-row": {
         const list = document.querySelector("#customFieldList");
         if (list) {
-          list.insertAdjacentHTML("beforeend", renderCustomFieldRow({ field: { id: uid("field"), visibility: "masked", searchable: true }, valueType: "text" }));
+          list.classList.remove("is-hidden");
+          list.insertAdjacentHTML("beforeend", renderCustomFieldRow({ field: { id: uid("field"), visibility: "masked" } }));
         }
         break;
       }
@@ -1379,25 +1493,9 @@ function bindGlobalEvents() {
       state.filters.status = target.value;
       render();
     }
-    if (action === "filter-archived") {
-      state.filters.archived = target.value;
-      render();
-    }
     if (action === "filter-sort") {
       state.filters.sort = target.value;
       render();
-    }
-    if (action === "filter-favorite") {
-      state.filters.favorite = target.value;
-      render();
-    }
-    if (action === "filter-linked") {
-      state.filters.linkedTo = target.value;
-      render();
-    }
-    if (action === "filter-tag") {
-      state.filters.tag = target.value;
-      updateSearchView();
     }
   });
 
@@ -1433,9 +1531,10 @@ function bindGlobalEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"]')) {
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
+      syncAccountFormPlatformState(form);
       return;
     }
     if (target.matches('input[type="file"][data-import-file]')) {
@@ -1454,9 +1553,10 @@ function bindGlobalEvents() {
       savePassphrase(target.value);
       return;
     }
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"]')) {
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
+      syncAccountFormPlatformState(form);
       return;
     }
     if (target.matches('select[name="showArchived"]')) {

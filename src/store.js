@@ -3,6 +3,7 @@ import {
   compact,
   nowIso,
   normalizeText,
+  normalizePlatformCategory,
   safeJsonParse,
   uid
 } from "./domain.js";
@@ -12,6 +13,28 @@ const STORAGE_KEY = "socialx:owners:v2";
 const clone = globalThis.structuredClone
   ? (value) => globalThis.structuredClone(value)
   : (value) => JSON.parse(JSON.stringify(value));
+
+function normalizeCustomPlatforms(value = {}) {
+  const groups = {
+    social: [],
+    bank: [],
+    government: []
+  };
+  for (const group of Object.keys(groups)) {
+    const entries = Array.isArray(value?.[group]) ? value[group] : [];
+    groups[group] = [...new Set(entries.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
+  }
+  return groups;
+}
+
+function normalizeSettings(value = {}) {
+  return {
+    vaultPassphrase: value.vaultPassphrase ?? "",
+    showArchived: Boolean(value.showArchived ?? false),
+    lastSeenAt: value.lastSeenAt ?? null,
+    customPlatforms: normalizeCustomPlatforms(value.customPlatforms ?? {})
+  };
+}
 
 function createEmptyOwnerState(ownerId) {
   return {
@@ -29,7 +52,8 @@ function createEmptyOwnerState(ownerId) {
     settings: {
       vaultPassphrase: "",
       showArchived: false,
-      lastSeenAt: null
+      lastSeenAt: null,
+      customPlatforms: normalizeCustomPlatforms()
     },
     sync: {
       remoteEnabled: false,
@@ -100,6 +124,26 @@ function rowToAccount(row) {
     updatedAt: row.updated_at ?? nowIso(),
     lastAccessedAt: row.last_accessed_at ?? null,
     searchBlob: ""
+  };
+}
+
+function rowToUser(row) {
+  const settings = typeof row.settings_json === "string" ? safeJsonParse(row.settings_json, {}) : row.settings_json ?? {};
+  return {
+    displayName: row.display_name ?? "",
+    email: row.email ?? "",
+    avatarUrl: row.avatar_url ?? "",
+    settings: normalizeSettings(settings)
+  };
+}
+
+function userToRow(ownerId, snapshot) {
+  return {
+    auth_user_id: ownerId,
+    display_name: snapshot.profile.displayName ?? "",
+    email: snapshot.profile.email ?? "",
+    avatar_url: snapshot.profile.avatarUrl ?? "",
+    settings_json: snapshot.settings ?? {}
   };
 }
 
@@ -371,7 +415,7 @@ function normalizeOwnerSnapshot(ownerId, snapshot = {}) {
   owner.activityLog = normalizeList(snapshot.activityLog);
   owner.settings = {
     ...owner.settings,
-    ...(snapshot.settings ?? {})
+    ...normalizeSettings(snapshot.settings ?? {})
   };
   owner.sync = {
     ...owner.sync,
@@ -462,11 +506,16 @@ export function createStore() {
       const owner = createEmptyOwnerState(ownerId);
       const userRow = Array.isArray(userRows) ? userRows[0] : userRows;
       if (userRow) {
+        const userProfile = rowToUser(userRow);
         owner.profile = {
           ownerId,
-          displayName: userRow.display_name ?? "",
-          email: userRow.email ?? "",
-          avatarUrl: userRow.avatar_url ?? ""
+          displayName: userProfile.displayName,
+          email: userProfile.email,
+          avatarUrl: userProfile.avatarUrl
+        };
+        owner.settings = {
+          ...owner.settings,
+          ...userProfile.settings
         };
       }
       owner.accounts = normalizeList(accountRows).map(rowToAccount);
@@ -510,12 +559,7 @@ export function createStore() {
         await exec(client.from("users").delete().eq("auth_user_id", ownerId));
         await exec(
           client.from("users").insert([
-            {
-              auth_user_id: ownerId,
-              display_name: snapshot.profile.displayName ?? "",
-              email: snapshot.profile.email ?? "",
-              avatar_url: snapshot.profile.avatarUrl ?? ""
-            }
+            userToRow(ownerId, snapshot)
           ])
         );
 
@@ -1122,8 +1166,28 @@ export function createStore() {
       const owner = touchOwner(ownerId);
       owner.settings = {
         ...owner.settings,
-        ...patch
+        ...normalizeSettings({
+          ...owner.settings,
+          ...patch
+        })
       };
+      schedulePersist(ownerId);
+      return clone(owner.settings);
+    },
+
+    addCustomPlatform(ownerId, category, platformName) {
+      const owner = touchOwner(ownerId);
+      const key = normalizePlatformCategory(category);
+      const name = String(platformName ?? "").trim();
+      if (!name) return clone(owner.settings);
+      const customPlatforms = normalizeCustomPlatforms(owner.settings.customPlatforms ?? {});
+      if (!customPlatforms[key].some((entry) => normalizeText(entry) === normalizeText(name))) {
+        customPlatforms[key].push(name);
+      }
+      owner.settings = normalizeSettings({
+        ...owner.settings,
+        customPlatforms
+      });
       schedulePersist(ownerId);
       return clone(owner.settings);
     }

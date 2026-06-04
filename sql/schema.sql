@@ -5,6 +5,7 @@ create table if not exists users (
   display_name text,
   email text,
   avatar_url text,
+  settings_json jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -14,6 +14,35 @@ export const PLATFORM_OPTIONS = [
   "Custom"
 ];
 
+export const PLATFORM_CATEGORY_LABELS = {
+  social: "Social",
+  bank: "Bank",
+  government: "Government"
+};
+
+export const PLATFORM_CATEGORY_OPTIONS = {
+  social: ["Google", "Facebook", "Instagram", "TikTok", "X / Twitter", "Discord", "Steam", "Riot / Valorant", "Epic Games"],
+  bank: ["PayPal", "Coins.ph", "GCash", "Maya", "BDO", "GoTyme", "Atome"],
+  government: ["TIN ID", "PAGIBIG", "PhilHealth", "NBI", "PhilSys", "eGOVph", "PNP"]
+};
+
+export const PLATFORM_CATEGORY_ORDER = ["social", "bank", "government"];
+
+export function normalizePlatformCategory(value = "social") {
+  const normalized = normalizeText(value);
+  if (normalized.includes("bank")) return "bank";
+  if (normalized.includes("government")) return "government";
+  return "social";
+}
+
+export function getPlatformOptionsForCategory(category = "social", customPlatforms = []) {
+  const key = normalizePlatformCategory(category);
+  const base = PLATFORM_CATEGORY_OPTIONS[key] ?? [];
+  const custom = Array.isArray(customPlatforms) ? customPlatforms : [];
+  const merged = [...base, ...custom.filter(Boolean)];
+  return [...new Set(merged)];
+}
+
 export const STATUS_OPTIONS = ["active", "paused", "locked", "archived", "pending", "closed"];
 
 export const RELATIONSHIP_TYPES = [
@@ -106,4 +135,3 @@ export function safeJsonParse(value, fallback) {
     return fallback;
   }
 }
-
