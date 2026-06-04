@@ -298,6 +298,61 @@ function accountById(owner, id) {
   return owner.accounts.find((account) => account.id === id) ?? null;
 }
 
+function deriveAccountLabel(draft, fallback = "Account") {
+  if (draft.linkMode === "linkedGoogle") {
+    return (
+      draft.username?.trim() ||
+      draft.platform?.trim() ||
+      draft.mainEmail?.trim() ||
+      fallback
+    );
+  }
+
+  return (
+    draft.username?.trim() ||
+    draft.mainEmail?.trim() ||
+    draft.platform?.trim() ||
+    fallback
+  );
+}
+
+function resolveAnchorRelation(owner, accountId) {
+  return owner.accountRelationships.find(
+    (relation) => relation.childAccountId === accountId && relation.relationshipType === "anchor"
+  ) ?? null;
+}
+
+function syncAnchorLink(owner, accountId, linkMode, anchorAccountId) {
+  const existingAnchor = resolveAnchorRelation(owner, accountId);
+  if (linkMode === "linkedGoogle" && existingAnchor?.parentAccountId === anchorAccountId) {
+    return;
+  }
+
+  owner.accountRelationships = owner.accountRelationships.filter(
+    (relation) => !(relation.childAccountId === accountId && relation.relationshipType === "anchor")
+  );
+
+  if (linkMode !== "linkedGoogle" || !anchorAccountId || anchorAccountId === accountId) {
+    return;
+  }
+
+  const anchorAccount = accountById(owner, anchorAccountId);
+  if (!anchorAccount || anchorAccount.platform !== "Google") {
+    return;
+  }
+
+  owner.accountRelationships.unshift({
+    id: uid("rel"),
+    ownerId: owner.profile.ownerId,
+    parentAccountId: anchorAccountId,
+    childAccountId: accountId,
+    relationshipType: "anchor",
+    notes: "",
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  });
+}
+
 function normalizeOwnerSnapshot(ownerId, snapshot = {}) {
   const owner = createEmptyOwnerState(ownerId);
   owner.profile = {
@@ -637,19 +692,20 @@ export function createStore() {
 
     createAccount(ownerId, actorId, draft) {
       const owner = touchOwner(ownerId);
+      const anchorAccount = draft.linkMode === "linkedGoogle" ? accountById(owner, draft.anchorAccountId) : null;
       const account = {
         id: uid("acct"),
         ownerId,
         platform: draft.platform?.trim() || "Custom",
         accountType: draft.accountType?.trim() || draft.platform?.trim() || "Custom",
-        label: draft.label?.trim() || draft.mainEmail?.trim() || "Untitled account",
-        mainEmail: draft.mainEmail?.trim() || "",
+        label: deriveAccountLabel(draft, draft.platform?.trim() || "Account"),
+        mainEmail: draft.mainEmail?.trim() || anchorAccount?.mainEmail || "",
         username: draft.username?.trim() || "",
         secretRecord: draft.secretRecord ?? null,
         status: draft.status || "active",
         notes: draft.notes?.trim() || "",
-        favorite: Boolean(draft.favorite),
-        archived: Boolean(draft.archived),
+        favorite: Boolean(draft.favorite ?? false),
+        archived: Boolean(draft.archived ?? false),
         tags: normalizeList(draft.tags).map((tag) => tag.trim()).filter(Boolean),
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -688,33 +744,7 @@ export function createStore() {
         });
       }
 
-      for (const parentId of normalizeList(draft.parentIds)) {
-        if (!parentId || parentId === account.id) continue;
-        owner.accountRelationships.unshift({
-          id: uid("rel"),
-          ownerId,
-          parentAccountId: parentId,
-          childAccountId: account.id,
-          relationshipType: draft.relationshipType || "anchor",
-          notes: draft.relationshipNote?.trim() || "",
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        });
-      }
-
-      for (const childId of normalizeList(draft.childIds)) {
-        if (!childId || childId === account.id) continue;
-        owner.accountRelationships.unshift({
-          id: uid("rel"),
-          ownerId,
-          parentAccountId: account.id,
-          childAccountId: childId,
-          relationshipType: draft.relationshipType || "child account",
-          notes: draft.relationshipNote?.trim() || "",
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        });
-      }
+      syncAnchorLink(owner, account.id, draft.linkMode, draft.anchorAccountId);
 
       createActivity(owner, {
         ownerId,
@@ -739,19 +769,18 @@ export function createStore() {
       if (!account) {
         throw new Error("Account not found");
       }
+      const anchorAccount = draft.linkMode === "linkedGoogle" ? accountById(owner, draft.anchorAccountId) : null;
       const before = clone(account);
       account.platform = draft.platform?.trim() || account.platform;
       account.accountType = draft.accountType?.trim() || account.accountType;
-      account.label = draft.label?.trim() || account.label;
-      account.mainEmail = draft.mainEmail?.trim() || "";
+      account.label = deriveAccountLabel(draft, account.label);
+      account.mainEmail = draft.mainEmail?.trim() || anchorAccount?.mainEmail || account.mainEmail || "";
       account.username = draft.username?.trim() || "";
       if (draft.secretRecord) {
         account.secretRecord = draft.secretRecord;
       }
       account.status = draft.status || account.status;
       account.notes = draft.notes?.trim() || "";
-      account.favorite = Boolean(draft.favorite);
-      account.archived = Boolean(draft.archived);
       account.tags = normalizeList(draft.tags).map((tag) => tag.trim()).filter(Boolean);
       account.updatedAt = nowIso();
 
@@ -791,35 +820,7 @@ export function createStore() {
         });
       }
 
-      owner.accountRelationships = owner.accountRelationships.filter(
-        (relation) => relation.parentAccountId !== accountId && relation.childAccountId !== accountId
-      );
-      for (const parentId of normalizeList(draft.parentIds)) {
-        if (!parentId || parentId === accountId) continue;
-        owner.accountRelationships.unshift({
-          id: uid("rel"),
-          ownerId,
-          parentAccountId: parentId,
-          childAccountId: accountId,
-          relationshipType: draft.relationshipType || "anchor",
-          notes: draft.relationshipNote?.trim() || "",
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        });
-      }
-      for (const childId of normalizeList(draft.childIds)) {
-        if (!childId || childId === accountId) continue;
-        owner.accountRelationships.unshift({
-          id: uid("rel"),
-          ownerId,
-          parentAccountId: accountId,
-          childAccountId: childId,
-          relationshipType: draft.relationshipType || "child account",
-          notes: draft.relationshipNote?.trim() || "",
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        });
-      }
+      syncAnchorLink(owner, accountId, draft.linkMode, draft.anchorAccountId);
 
       createActivity(owner, {
         ownerId,

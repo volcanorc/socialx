@@ -500,12 +500,19 @@ a {
 .avatar {
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
+  overflow: hidden;
   font-weight: 800;
   background: linear-gradient(135deg, var(--accent-2), #b98cff);
   color: white;
+}
+
+.avatar-image {
+  display: block;
+  object-fit: cover;
+  background: #dbe4f0;
 }
 
 .summary-row {
@@ -837,6 +844,10 @@ a {
   grid-column: 1 / -1;
 }
 
+.full-width {
+  grid-column: 1 / -1;
+}
+
 .form-field label {
   color: var(--muted);
   font-size: 0.84rem;
@@ -857,16 +868,22 @@ a {
   gap: 10px;
 }
 
-.custom-field-item,
-.linked-item {
+.custom-field-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px auto auto;
   gap: 10px;
   align-items: center;
 }
 
 .linked-item {
+  display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.is-hidden {
+  display: none !important;
 }
 
 .checkbox-row {
@@ -928,6 +945,19 @@ mark {
   line-height: 1.55;
 }
 
+.form-note {
+  margin-bottom: 12px;
+}
+
+.account-form {
+  display: grid;
+  gap: 16px;
+}
+
+.modal-form-shell {
+  width: min(960px, 100%);
+}
+
 @media (max-width: 1280px) {
   .layout {
     grid-template-columns: 280px minmax(0, 1fr);
@@ -963,7 +993,8 @@ mark {
 
   .summary-row,
   .drawer-grid,
-  .form-grid {
+  .form-grid,
+  .custom-field-item {
     grid-template-columns: 1fr;
   }
 

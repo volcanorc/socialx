@@ -51,6 +51,80 @@ function getInitials(text = "") {
     .join("");
 }
 
+function getProfileImageUrl(user) {
+  return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
+}
+
+function renderProfileCircle(user, fallbackText = "U", className = "avatar") {
+  const imageUrl = getProfileImageUrl(user);
+  const title = user?.name ?? user?.email ?? "Profile";
+  if (imageUrl) {
+    return `<img class="${className} avatar-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" title="${escapeHtml(title)}" />`;
+  }
+  return `<div class="${className}" title="${escapeHtml(title)}">${escapeHtml(getInitials(user?.name ?? user?.email ?? fallbackText))}</div>`;
+}
+
+function renderCustomFieldRow(row = {}, options = {}) {
+  const field = row.field ?? {};
+  const rowId = row.fieldId ?? field.id ?? "";
+  const valueType = row.valueType ?? field.valueType ?? "text";
+  const visibility = row.visibility ?? field.visibility ?? "masked";
+  const searchable = row.searchable ?? field.searchable ?? true;
+  const name = row.field?.name ?? row.name ?? "";
+  const value = row.valueText ?? "";
+  const removeLabel = options.removeLabel ?? "Cancel custom field";
+
+  return `
+    <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(rowId)}" data-value-type="${escapeHtml(valueType)}">
+      <input name="customFieldName" placeholder="Field name" value="${escapeHtml(name)}" />
+      <input name="customFieldValue" placeholder="Field value" value="${escapeHtml(value)}" />
+      <select name="customFieldVisibility">
+        <option value="private" ${visibility === "private" ? "selected" : ""}>private</option>
+        <option value="public" ${visibility === "public" ? "selected" : ""}>public</option>
+        <option value="masked" ${visibility === "masked" ? "selected" : ""}>masked</option>
+      </select>
+      <label class="checkbox-row">
+        <input name="customFieldSearchable" type="checkbox" ${searchable === false ? "" : "checked"} />
+        <span>Searchable</span>
+      </label>
+      <button class="secondary-button" type="button" data-action="remove-custom-field-row">${escapeHtml(removeLabel)}</button>
+    </div>
+  `;
+}
+
+function syncAccountFormLinkState(form) {
+  if (!(form instanceof HTMLFormElement)) return;
+  const linkMode = form.querySelector('[name="linkMode"]');
+  const platform = form.querySelector('[name="platform"]');
+  const mainEmail = form.querySelector('[name="mainEmail"]');
+  const anchorGroup = form.querySelector('[data-linked-google-field]');
+  const anchorSelect = form.querySelector('[name="anchorAccountId"]');
+  const owner = currentOwnerState();
+
+  if (!linkMode || !platform || !mainEmail || !anchorGroup || !anchorSelect || !owner) return;
+
+  const mode = linkMode.value === "linkedGoogle" ? "linkedGoogle" : "separate";
+  const googleOption = platform.querySelector('option[value="Google"]');
+  anchorGroup.classList.toggle("is-hidden", mode !== "linkedGoogle");
+  mainEmail.disabled = mode === "linkedGoogle";
+  if (googleOption) {
+    googleOption.hidden = mode === "linkedGoogle";
+    googleOption.disabled = mode === "linkedGoogle";
+  }
+
+  if (mode === "linkedGoogle") {
+    if (platform.value === "Google") {
+      const fallbackPlatform = [...platform.options].find((option) => option.value !== "Google");
+      if (fallbackPlatform) {
+        platform.value = fallbackPlatform.value;
+      }
+    }
+
+    const linkedAccount = owner.accounts.find((account) => account.id === anchorSelect.value);
+    mainEmail.value = linkedAccount?.mainEmail || "";
+  }
+}
+
 function setToast(title, message, tone = "info") {
   state.toast = { title, message, tone, createdAt: Date.now() };
   render();
@@ -243,33 +317,25 @@ function getDraftFromForm(form) {
     .map((tag) => tag.trim())
     .filter(Boolean);
 
-  const parentIds = [...form.querySelectorAll('[name="parentIds"]:checked')].map((input) => input.value);
-  const childIds = [...form.querySelectorAll('[name="childIds"]:checked')].map((input) => input.value);
   const customFields = [...form.querySelectorAll("[data-custom-field-row]")].map((row) => ({
     fieldId: row.dataset.fieldId || "",
+    valueType: row.dataset.valueType || "text",
     name: row.querySelector('[name="customFieldName"]')?.value ?? "",
     valueText: row.querySelector('[name="customFieldValue"]')?.value ?? "",
-    valueType: row.querySelector('[name="customFieldType"]')?.value ?? "text",
-    visibility: row.querySelector('[name="customFieldVisibility"]')?.value ?? "private",
+    visibility: row.querySelector('[name="customFieldVisibility"]')?.value ?? "masked",
     searchable: row.querySelector('[name="customFieldSearchable"]')?.checked ?? true
   }));
 
   return {
+    linkMode: formData.get("linkMode")?.toString() ?? "separate",
+    anchorAccountId: formData.get("anchorAccountId")?.toString() ?? "",
     platform: formData.get("platform")?.toString() ?? "Custom",
-    accountType: formData.get("accountType")?.toString() ?? "Custom",
-    label: formData.get("label")?.toString() ?? "",
     mainEmail: formData.get("mainEmail")?.toString() ?? "",
     username: formData.get("username")?.toString() ?? "",
     secretValue: formData.get("secretValue")?.toString() ?? "",
     status: formData.get("status")?.toString() ?? "active",
     notes: formData.get("notes")?.toString() ?? "",
-    favorite: formData.get("favorite") === "on",
-    archived: formData.get("archived") === "on",
     tags,
-    relationshipType: formData.get("relationshipType")?.toString() ?? "anchor",
-    relationshipNote: formData.get("relationshipNote")?.toString() ?? "",
-    parentIds,
-    childIds,
     customFields
   };
 }
@@ -285,6 +351,10 @@ async function evaluateDuplicates(form, ignoreId = null) {
 async function submitAccountForm(form, mode, accountId = null) {
   if (!state.ownerId || !state.session?.user?.id && !state.session?.userId && !state.ownerId) return;
   const draft = getDraftFromForm(form);
+  if (draft.linkMode === "linkedGoogle" && !draft.anchorAccountId) {
+    setToast("Choose a Google account", "Linked accounts need an existing Google anchor.", "danger");
+    return;
+  }
   const secretRecord = draft.secretValue
     ? await encryptSecret(draft.secretValue, state.passphrase || "")
     : null;
@@ -596,7 +666,7 @@ function renderTopbar(owner) {
         <button class="secondary-button" data-action="open-import">Import</button>
         <button class="secondary-button" data-action="open-export">Export</button>
         <button class="primary-button" data-action="open-create">Add account</button>
-        <div class="avatar" title="${escapeHtml(state.session?.user?.email ?? "")}">${escapeHtml(getInitials(state.session?.user?.name ?? state.session?.user?.email ?? "U"))}</div>
+        ${renderProfileCircle(state.session?.user, "U", "avatar profile-avatar")}
         <button class="ghost-button" data-action="sign-out">Sign out</button>
       </div>
     </header>
@@ -604,48 +674,73 @@ function renderTopbar(owner) {
 }
 
 function renderAccountForm(mode, account, owner) {
-  const allAccounts = owner.accounts.filter((entry) => !account || entry.id !== account.id);
+  const linkedGoogle = account?.parents?.find((entry) => entry.account?.platform === "Google") ?? null;
+  const linkMode = linkedGoogle ? "linkedGoogle" : "separate";
+  const anchorAccountId = linkedGoogle?.account?.id ?? "";
+  const linkedGoogleAccounts = owner.accounts.filter(
+    (entry) => entry.platform === "Google" && (!account || entry.id !== account.id)
+  );
+  const selectedPlatform = linkMode === "linkedGoogle" && (account?.platform ?? "") === "Google" ? "Custom" : (account?.platform ?? (linkMode === "linkedGoogle" ? "Custom" : "Google"));
   const customRows =
     mode === "edit" && account?.customFields.length
       ? account.customFields
       : [
           {
-            field: { id: uid("field"), name: "", valueType: "text", visibility: "private", searchable: true },
+            field: { id: uid("field"), name: "", valueType: "text", visibility: "masked", searchable: true },
             valueText: ""
           }
         ];
-  const parentIds = new Set(account?.parents?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
-  const childIds = new Set(account?.children?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
 
   return `
     ${
       state.duplicateWarnings.length
-        ? `<div class="note-box" style="margin-bottom: 14px;">
+        ? `<div class="note-box form-note">
             <strong>Possible duplicates</strong><br />
-            ${state.duplicateWarnings.map((warning) => `â€¢ ${escapeHtml(warning)}`).join("<br />")}
+            ${state.duplicateWarnings.map((warning) => `• ${escapeHtml(warning)}`).join("<br />")}
           </div>`
         : ""
     }
 
-    <form id="accountForm">
+    <form id="accountForm" class="account-form">
       <div class="form-grid">
+        <div class="form-field full">
+          <label>Link mode</label>
+          <select name="linkMode" data-action="link-mode">
+            <option value="linkedGoogle" ${linkMode === "linkedGoogle" ? "selected" : ""}>Linked to existing Google</option>
+            <option value="separate" ${linkMode === "separate" ? "selected" : ""}>Separate account</option>
+          </select>
+        </div>
+
+        <div class="form-field full ${linkMode === "linkedGoogle" ? "" : "is-hidden"}" data-linked-google-field>
+          <label>Link to existing Google</label>
+          <select name="anchorAccountId" data-action="anchor-google">
+            <option value="">Choose Google account</option>
+            ${linkedGoogleAccounts
+              .map(
+                (entry) => `
+                  <option value="${escapeHtml(entry.id)}" ${entry.id === anchorAccountId ? "selected" : ""}>
+                    ${escapeHtml(entry.label)}${entry.mainEmail ? ` · ${escapeHtml(entry.mainEmail)}` : ""}
+                  </option>
+                `
+              )
+              .join("")}
+          </select>
+          <div class="meta-line">This account will be linked under the selected Google identity.</div>
+        </div>
+
         <div class="form-field">
           <label>Main email or Google email</label>
-          <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" />
+          <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" ${linkMode === "linkedGoogle" ? "disabled" : ""} />
         </div>
         <div class="form-field">
           <label>Platform / type</label>
-          <select name="platform">
-            ${PLATFORM_OPTIONS.map((platform) => `<option value="${escapeHtml(platform)}" ${(account?.platform ?? "Google") === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
+          <select name="platform" data-action="platform-select">
+            ${PLATFORM_OPTIONS.map((platform) => {
+              const hidden = linkMode === "linkedGoogle" && platform === "Google";
+              const selected = selectedPlatform === platform;
+              return `<option value="${escapeHtml(platform)}" ${hidden ? 'hidden disabled' : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
+            }).join("")}
           </select>
-        </div>
-        <div class="form-field">
-          <label>Label / title</label>
-          <input name="label" placeholder="Primary Google, Steam main, PAG-IBIG account..." value="${escapeHtml(account?.label ?? "")}" />
-        </div>
-        <div class="form-field">
-          <label>Account type</label>
-          <input name="accountType" placeholder="personal, work, government, gaming..." value="${escapeHtml(account?.accountType ?? "")}" />
         </div>
         <div class="form-field">
           <label>Username</label>
@@ -669,92 +764,15 @@ function renderAccountForm(mode, account, owner) {
           <label>Notes</label>
           <textarea name="notes" rows="4" placeholder="Context, recovery notes, linked email pattern...">${escapeHtml(account?.notes ?? "")}</textarea>
         </div>
-        <div class="form-field full">
-          <label>Relationship type for links</label>
-          <select name="relationshipType">
-            ${RELATIONSHIP_TYPES.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("")}
-          </select>
-        </div>
-        <div class="form-field full">
-          <label>Relationship notes</label>
-          <textarea name="relationshipNote" rows="2" placeholder="Optional note applied to the relationships created by this record."></textarea>
-        </div>
-      </div>
 
-      <div class="stack" style="margin-top: 16px;">
-        <div class="relationship-box">
-          <h3 class="section-title">Parent links</h3>
-          <div class="scroll-list">
-            ${allAccounts
-              .map(
-                (entry) => `
-                  <label class="linked-item">
-                    <input type="checkbox" name="parentIds" value="${escapeHtml(entry.id)}" ${parentIds.has(entry.id) ? "checked" : ""} />
-                    <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
-                    <span class="badge">${escapeHtml(entry.status)}</span>
-                  </label>
-                `
-              )
-              .join("")}
-          </div>
-        </div>
-
-        <div class="relationship-box">
-          <h3 class="section-title">Child links</h3>
-          <div class="scroll-list">
-            ${allAccounts
-              .map(
-                (entry) => `
-                  <label class="linked-item">
-                    <input type="checkbox" name="childIds" value="${escapeHtml(entry.id)}" ${childIds.has(entry.id) ? "checked" : ""} />
-                    <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
-                    <span class="badge">${escapeHtml(entry.status)}</span>
-                  </label>
-                `
-              )
-              .join("")}
-          </div>
-        </div>
-
-        <div class="custom-field-box">
+        <div class="custom-field-box full-width">
           <div class="list-toolbar">
             <h3 class="section-title">Custom fields</h3>
             <button class="ghost-button" type="button" data-action="add-custom-field-row">Add custom field</button>
           </div>
           <div class="custom-field-list" id="customFieldList">
-            ${
-              customRows
-                .map(
-                  (row) => `
-                    <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(row.field?.id ?? row.fieldId ?? "")}">
-                      <input name="customFieldName" placeholder="Field name" value="${escapeHtml(row.field?.name ?? row.name ?? "")}" />
-                      <input name="customFieldValue" placeholder="Field value" value="${escapeHtml(row.valueText ?? "")}" />
-                      <select name="customFieldType">
-                        <option value="text" ${escapeHtml(row.field?.valueType ?? "text") === "text" ? "selected" : ""}>text</option>
-                        <option value="number" ${escapeHtml(row.field?.valueType ?? "text") === "number" ? "selected" : ""}>number</option>
-                        <option value="boolean" ${escapeHtml(row.field?.valueType ?? "text") === "boolean" ? "selected" : ""}>boolean</option>
-                        <option value="json" ${escapeHtml(row.field?.valueType ?? "text") === "json" ? "selected" : ""}>json</option>
-                        <option value="secret" ${escapeHtml(row.field?.valueType ?? "text") === "secret" ? "selected" : ""}>secret</option>
-                      </select>
-                      <select name="customFieldVisibility">
-                        ${FIELD_VISIBILITY.map((visibility) => `<option value="${escapeHtml(visibility)}" ${(row.field?.visibility ?? "private") === visibility ? "selected" : ""}>${escapeHtml(visibility)}</option>`).join("")}
-                      </select>
-                      <label class="checkbox-row">
-                        <input name="customFieldSearchable" type="checkbox" ${row.field?.searchable === false ? "" : "checked"} />
-                        <span>Searchable</span>
-                      </label>
-                      <button class="danger-button" type="button" data-action="remove-custom-field-row">Remove</button>
-                    </div>
-                  `
-                )
-                .join("")
-            }
+            ${customRows.map((row) => renderCustomFieldRow(row)).join("")}
           </div>
-        </div>
-
-        <div class="checkbox-row">
-          <label class="checkbox-row"><input type="checkbox" name="favorite" ${account?.favorite ? "checked" : ""} /><span>Favorite</span></label>
-          <label class="checkbox-row"><input type="checkbox" name="archived" ${account?.archived ? "checked" : ""} /><span>Archived</span></label>
         </div>
       </div>
 
@@ -829,174 +847,18 @@ function renderModal() {
   const mode = state.modal.mode;
   const account = mode === "edit" ? store.getAccount(state.ownerId, state.modal.accountId) : null;
   const title = mode === "edit" ? `Edit ${account?.label ?? "account"}` : "Add account";
-  const allAccounts = owner.accounts.filter((entry) => !account || entry.id !== account.id);
-  const customRows = mode === "edit" && account?.customFields.length
-    ? account.customFields
-    : [
-        {
-          field: { id: uid("field"), name: "", valueType: "text", visibility: "private", searchable: true },
-          valueText: ""
-        }
-      ];
-  const parentIds = new Set(account?.parents?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
-  const childIds = new Set(account?.children?.map((entry) => entry.account?.id).filter(Boolean) ?? []);
 
   return `
     <div class="modal-backdrop" data-action="close-modal">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+      <div class="modal modal-form-shell" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
         <div class="modal-head">
           <div>
             <h2 id="accountModalTitle">${escapeHtml(title)}</h2>
-            <div class="meta-line">Use the form to add the account, linked identities, and any custom fields.</div>
+            <div class="meta-line">A simple account form with Google linking and custom fields.</div>
           </div>
           <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
         </div>
-
-        ${
-          state.duplicateWarnings.length
-            ? `<div class="note-box" style="margin-bottom: 14px;">
-                <strong>Possible duplicates</strong><br />
-                ${state.duplicateWarnings.map((warning) => `• ${escapeHtml(warning)}`).join("<br />")}
-              </div>`
-            : ""
-        }
-
-        <form id="accountForm">
-          <div class="form-grid">
-            <div class="form-field">
-              <label>Main email or Google email</label>
-              <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" />
-            </div>
-            <div class="form-field">
-              <label>Platform / type</label>
-              <select name="platform">
-                ${PLATFORM_OPTIONS.map((platform) => `<option value="${escapeHtml(platform)}" ${(account?.platform ?? "Google") === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Label / title</label>
-              <input name="label" placeholder="Primary Google, Steam main, PAG-IBIG account..." value="${escapeHtml(account?.label ?? "")}" />
-            </div>
-            <div class="form-field">
-              <label>Account type</label>
-              <input name="accountType" placeholder="personal, work, government, gaming..." value="${escapeHtml(account?.accountType ?? "")}" />
-            </div>
-            <div class="form-field">
-              <label>Username</label>
-              <input name="username" placeholder="@handle / account username" value="${escapeHtml(account?.username ?? "")}" />
-            </div>
-            <div class="form-field">
-              <label>Password or secret label</label>
-              <input name="secretValue" type="password" placeholder="Stored encrypted if provided" />
-            </div>
-            <div class="form-field">
-              <label>Status</label>
-              <select name="status">
-                ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${(account?.status ?? "active") === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
-              </select>
-            </div>
-            <div class="form-field">
-              <label>Tags</label>
-              <input name="tags" placeholder="personal, finance, government" value="${escapeHtml((account?.tags ?? []).join(", "))}" />
-            </div>
-            <div class="form-field full">
-              <label>Notes</label>
-              <textarea name="notes" rows="4" placeholder="Context, recovery notes, linked email pattern...">${escapeHtml(account?.notes ?? "")}</textarea>
-            </div>
-            <div class="form-field full">
-              <label>Relationship type for links</label>
-              <select name="relationshipType">
-                ${RELATIONSHIP_TYPES.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("")}
-              </select>
-            </div>
-            <div class="form-field full">
-              <label>Relationship notes</label>
-              <textarea name="relationshipNote" rows="2" placeholder="Optional note applied to the relationships created by this record."></textarea>
-            </div>
-          </div>
-
-          <div class="stack" style="margin-top: 16px;">
-            <div class="relationship-box">
-              <h3 class="section-title">Parent links</h3>
-              <div class="scroll-list">
-                ${allAccounts
-                  .map(
-                    (entry) => `
-                      <label class="linked-item">
-                        <input type="checkbox" name="parentIds" value="${escapeHtml(entry.id)}" ${parentIds.has(entry.id) ? "checked" : ""} />
-                        <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
-                        <span class="badge">${escapeHtml(entry.status)}</span>
-                      </label>
-                    `
-                  )
-                  .join("")}
-              </div>
-            </div>
-
-            <div class="relationship-box">
-              <h3 class="section-title">Child links</h3>
-              <div class="scroll-list">
-                ${allAccounts
-                  .map(
-                    (entry) => `
-                      <label class="linked-item">
-                        <input type="checkbox" name="childIds" value="${escapeHtml(entry.id)}" ${childIds.has(entry.id) ? "checked" : ""} />
-                        <span>${escapeHtml(entry.label)} <span class="muted">(${escapeHtml(entry.platform)})</span></span>
-                        <span class="badge">${escapeHtml(entry.status)}</span>
-                      </label>
-                    `
-                  )
-                  .join("")}
-              </div>
-            </div>
-
-            <div class="custom-field-box">
-              <div class="list-toolbar">
-                <h3 class="section-title">Custom fields</h3>
-                <button class="ghost-button" type="button" data-action="add-custom-field-row">Add custom field</button>
-              </div>
-              <div class="custom-field-list" id="customFieldList">
-                ${
-                  customRows
-                    .map(
-                      (row) => `
-                        <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(row.field?.id ?? row.fieldId ?? "")}">
-                          <input name="customFieldName" placeholder="Field name" value="${escapeHtml(row.field?.name ?? row.name ?? "")}" />
-                          <input name="customFieldValue" placeholder="Field value" value="${escapeHtml(row.valueText ?? "")}" />
-                          <select name="customFieldType">
-                            <option value="text" ${escapeHtml(row.field?.valueType ?? "text") === "text" ? "selected" : ""}>text</option>
-                            <option value="number" ${escapeHtml(row.field?.valueType ?? "text") === "number" ? "selected" : ""}>number</option>
-                            <option value="boolean" ${escapeHtml(row.field?.valueType ?? "text") === "boolean" ? "selected" : ""}>boolean</option>
-                            <option value="json" ${escapeHtml(row.field?.valueType ?? "text") === "json" ? "selected" : ""}>json</option>
-                            <option value="secret" ${escapeHtml(row.field?.valueType ?? "text") === "secret" ? "selected" : ""}>secret</option>
-                          </select>
-                          <select name="customFieldVisibility">
-                            ${FIELD_VISIBILITY.map((visibility) => `<option value="${escapeHtml(visibility)}" ${(row.field?.visibility ?? "private") === visibility ? "selected" : ""}>${escapeHtml(visibility)}</option>`).join("")}
-                          </select>
-                          <label class="checkbox-row">
-                            <input name="customFieldSearchable" type="checkbox" ${row.field?.searchable === false ? "" : "checked"} />
-                            <span>Searchable</span>
-                          </label>
-                          <button class="danger-button" type="button" data-action="remove-custom-field-row">Remove</button>
-                        </div>
-                      `
-                    )
-                    .join("")
-                }
-              </div>
-            </div>
-
-            <div class="checkbox-row">
-              <label class="checkbox-row"><input type="checkbox" name="favorite" ${account?.favorite ? "checked" : ""} /><span>Favorite</span></label>
-              <label class="checkbox-row"><input type="checkbox" name="archived" ${account?.archived ? "checked" : ""} /><span>Archived</span></label>
-            </div>
-          </div>
-
-          <div class="form-actions">
-            <button class="secondary-button" type="button" data-action="close-modal">Cancel</button>
-            <button class="primary-button" type="submit">${mode === "edit" ? "Save changes" : "Create account"}</button>
-          </div>
-        </form>
+        ${renderAccountForm(mode, account, owner)}
       </div>
     </div>
   `;
@@ -1353,30 +1215,7 @@ function bindGlobalEvents() {
       case "add-custom-field-row": {
         const list = document.querySelector("#customFieldList");
         if (list) {
-          list.insertAdjacentHTML(
-            "beforeend",
-            `
-              <div class="custom-field-item" data-custom-field-row data-field-id="">
-                <input name="customFieldName" placeholder="Field name" />
-                <input name="customFieldValue" placeholder="Field value" />
-                <select name="customFieldType">
-                  <option value="text">text</option>
-                  <option value="number">number</option>
-                  <option value="boolean">boolean</option>
-                  <option value="json">json</option>
-                  <option value="secret">secret</option>
-                </select>
-                <select name="customFieldVisibility">
-                  ${FIELD_VISIBILITY.map((visibility) => `<option value="${escapeHtml(visibility)}">${escapeHtml(visibility)}</option>`).join("")}
-                </select>
-                <label class="checkbox-row">
-                  <input name="customFieldSearchable" type="checkbox" checked />
-                  <span>Searchable</span>
-                </label>
-                <button class="danger-button" type="button" data-action="remove-custom-field-row">Remove</button>
-              </div>
-            `
-          );
+          list.insertAdjacentHTML("beforeend", renderCustomFieldRow({ field: { id: uid("field"), visibility: "masked", searchable: true }, valueType: "text" }));
         }
         break;
       }
@@ -1488,6 +1327,11 @@ function bindGlobalEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"]')) {
+      const form = target.closest("form");
+      syncAccountFormLinkState(form);
+      return;
+    }
     if (target.matches('input[type="file"][data-import-file]')) {
       const file = target.files?.[0];
       if (file) {
@@ -1502,6 +1346,11 @@ function bindGlobalEvents() {
     }
     if (target.matches('input[name="vaultPassphrase"]')) {
       savePassphrase(target.value);
+      return;
+    }
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"]')) {
+      const form = target.closest("form");
+      syncAccountFormLinkState(form);
       return;
     }
     if (target.matches('select[name="showArchived"]')) {
