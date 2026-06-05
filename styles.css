@@ -744,14 +744,17 @@ a {
 
 .list-grid {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: stretch;
 }
 
 .account-card {
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 10px 11px;
   display: grid;
   gap: 8px;
+  min-height: 100%;
   transition:
     transform 0.18s ease,
     border-color 0.18s ease,
@@ -772,7 +775,7 @@ a {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .account-title {
@@ -920,14 +923,31 @@ a {
   max-width: 320px;
 }
 
+.drawer-title-row {
+  align-items: center;
+  gap: 10px;
+}
+
+.drawer-platform-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.95);
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+}
+
 .drawer h2 {
   margin: 0;
   font-size: 1.08rem;
 }
 
 .drawer-section {
-  border-radius: 10px;
-  padding: 9px;
+  border-radius: 12px;
+  padding: 10px;
   background: rgba(15, 23, 42, 0.02);
   border: 1px solid rgba(15, 23, 42, 0.06);
   min-width: 0;
@@ -959,7 +979,7 @@ a {
 .linked-chip-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -1029,6 +1049,45 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.secret-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.secret-value {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secret-value.is-masked {
+  color: var(--muted);
+}
+
+.secret-value.is-revealed {
+  color: var(--text);
+}
+
+.secret-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.icon-button.subtle {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.03);
 }
 
 .drawer-grid.compact {
@@ -1182,10 +1241,10 @@ a {
 .custom-field-box,
 .relationship-box,
 .duplicate-box {
-  border-radius: 10px;
+  border-radius: 12px;
   background: rgba(15, 23, 42, 0.02);
   border: 1px solid rgba(15, 23, 42, 0.06);
-  padding: 9px;
+  padding: 10px;
 }
 
 .custom-field-box .list-toolbar {
@@ -1200,8 +1259,8 @@ a {
 
 .custom-field-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 104px auto;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 108px auto;
+  gap: 8px;
   align-items: end;
 }
 
@@ -1213,6 +1272,67 @@ a {
 .custom-field-label span {
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.custom-field-label input,
+.custom-field-item select {
+  border-radius: 11px;
+  padding: 0.58rem 0.72rem;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.masked-input.secret-input {
+  -webkit-text-security: disc;
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.platform-option {
+  width: 100%;
+  display: inline-grid;
+  justify-items: center;
+  align-items: center;
+  gap: 7px;
+  min-height: 78px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text);
+  text-align: center;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.platform-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(97, 215, 199, 0.3);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.platform-option.is-active {
+  border-color: rgba(97, 215, 199, 0.42);
+  background: rgba(97, 215, 199, 0.1);
+}
+
+.platform-option span {
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.15;
+  word-break: break-word;
 }
 
 .is-hidden {

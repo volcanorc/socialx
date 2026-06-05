@@ -17,7 +17,7 @@ import {
 } from "./domain.js";
 import { createStore } from "./store.js";
 import { createAuthBridge } from "./auth.js";
-import { encryptSecret } from "./crypto.js";
+import { decryptSecret, encryptSecret } from "./crypto.js";
 
 const app = document.querySelector("#app");
 const store = createStore();
@@ -42,6 +42,8 @@ const state = {
   modal: null,
   toast: null,
   duplicateWarnings: [],
+  secretCache: {},
+  revealedSecrets: {},
   platformSelections: {
     social: "Google",
     bank: "PayPal",
@@ -70,6 +72,83 @@ function getDefaultPlatformSelection(category = "social") {
   return "Google";
 }
 
+function getPlatformFallback(owner, category, linkedGoogleMode = false) {
+  const options = buildPlatformOptions(owner, category, { linkedGoogleMode });
+  return (
+    options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ??
+    options[0] ??
+    getDefaultPlatformSelection(category)
+  );
+}
+
+function renderPlatformTile(platform, selected, hidden = false) {
+  const active = selected ? "is-active" : "";
+  const hiddenClass = hidden ? "is-hidden" : "";
+  const tone = escapeHtml(platformTone(platform));
+  return `
+    <button
+      type="button"
+      class="platform-option ${active} ${hiddenClass} platform-${tone}"
+      data-action="platform-option"
+      data-platform-value="${escapeHtml(platform)}"
+      data-platform-option="${escapeHtml(platform)}"
+      ${hidden ? 'aria-hidden="true" tabindex="-1"' : ""}
+    >
+      ${renderPlatformIcon(platform)}
+      <span>${escapeHtml(platform)}</span>
+    </button>
+  `;
+}
+
+function renderPlatformGrid(owner, category, selectedPlatform, linkMode) {
+  const options = buildPlatformOptions(owner, category, { linkedGoogleMode: linkMode === "linkedGoogle" });
+  const fallbackPlatform = getPlatformFallback(owner, category, linkMode === "linkedGoogle");
+  const normalizedSelected = normalizeText(selectedPlatform);
+  const displayValue =
+    linkMode === "linkedGoogle" && normalizedSelected === normalizeText("Google") ? fallbackPlatform : selectedPlatform;
+  const nextValue = options.some((option) => normalizeText(option) === normalizeText(displayValue))
+    ? displayValue
+    : fallbackPlatform;
+
+  const customVisible = normalizeText(nextValue) === normalizeText("Custom");
+  return `
+    <input type="hidden" name="platform" value="${escapeHtml(nextValue)}" data-platform-value />
+    <div class="platform-grid" data-platform-grid>
+      ${options
+        .map((platform) => {
+          const hidden = linkMode === "linkedGoogle" && normalizeText(platform) === normalizeText("Google");
+          const selected = normalizeText(nextValue) === normalizeText(platform);
+          return renderPlatformTile(platform, selected, hidden);
+        })
+        .join("")}
+    </div>
+    <input type="hidden" name="customPlatformVisible" value="${customVisible ? "true" : "false"}" data-custom-platform-visible />
+  `;
+}
+
+function renderEyeIcon(open = false) {
+  return open
+    ? `<svg viewBox="0 0 24 24" width="16" height="16" focusable="false" aria-hidden="true"><path fill="currentColor" d="M12 5c5.45 0 9.73 3.21 11.25 7-.94 2.35-2.58 4.23-4.67 5.54l-1.42-1.42c1.54-.92 2.79-2.2 3.63-3.92C19.42 10.06 16.05 7 12 7c-1.15 0-2.25.21-3.26.59L7.22 6.07A10.6 10.6 0 0 1 12 5Zm0 14c-5.45 0-9.73-3.21-11.25-7 .9-2.24 2.45-4.05 4.43-5.34l1.43 1.43C4.7 9.92 3.57 11.18 2.75 13 4.58 16.73 8 19 12 19c1.18 0 2.3-.23 3.35-.66l1.4 1.4A10.6 10.6 0 0 1 12 19Zm0-12a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>`
+    : `<svg viewBox="0 0 24 24" width="16" height="16" focusable="false" aria-hidden="true"><path fill="currentColor" d="m2.1 3.51 1.41-1.41L20.9 19.48l-1.41 1.41-3.06-3.06A10.9 10.9 0 0 1 12 19C6.55 19 2.27 15.79 0.75 12c.73-1.82 1.92-3.37 3.44-4.6L2.1 3.51Zm7.07 7.07A3 3 0 0 0 12 15.48a3 3 0 0 0 2.42-4.78l-1.6-1.6a3 3 0 0 0-3.65 0ZM12 5c5.45 0 9.73 3.21 11.25 7a12.3 12.3 0 0 1-3.16 4.3l-1.46-1.46c1.14-.9 2.04-2.04 2.67-3.42C19.42 10.06 16.05 7 12 7c-.6 0-1.19.06-1.75.18l-1.7-1.7A10.6 10.6 0 0 1 12 5Zm0 14c-1.18 0-2.3-.23-3.35-.66l1.53-1.53c.58.13 1.19.19 1.82.19 4.05 0 7.42-3.06 8.59-5.42A12.2 12.2 0 0 0 17.25 9.2l1.49-1.49C20.23 8.9 21.47 10.39 22.5 12c-1.52 3.79-5.8 7-11.25 7Z"/></svg>`;
+}
+
+function renderCopyIcon() {
+  return `<svg viewBox="0 0 24 24" width="16" height="16" focusable="false" aria-hidden="true"><path fill="currentColor" d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1Zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H10V7h9v14Z"/></svg>`;
+}
+
+async function getAccountSecretValue(accountId) {
+  if (!state.ownerId || !accountId) return "";
+  if (state.secretCache[accountId]) return state.secretCache[accountId];
+  const account = store.getAccount(state.ownerId, accountId);
+  if (!account?.secretRecord) return "";
+  const decrypted = await decryptSecret(account.secretRecord, state.passphrase || "");
+  if (!decrypted || decrypted === "Encrypted") {
+    return "";
+  }
+  state.secretCache[accountId] = decrypted;
+  return decrypted;
+}
+
 function renderProfileCircle(user, fallbackText = "U", className = "avatar") {
   const imageUrl = getProfileImageUrl(user);
   const title = user?.name ?? user?.email ?? "Profile";
@@ -91,11 +170,11 @@ function renderCustomFieldRow(row = {}, options = {}) {
     <div class="custom-field-item" data-custom-field-row data-field-id="${escapeHtml(rowId)}">
       <label class="custom-field-label">
         <span>Name</span>
-        <input name="customFieldName" value="${escapeHtml(name)}" />
+        <input name="customFieldName" value="${escapeHtml(name)}" placeholder="Field name" />
       </label>
       <label class="custom-field-label">
         <span>Value</span>
-        <input name="customFieldValue" value="${escapeHtml(value)}" />
+        <input name="customFieldValue" value="${escapeHtml(value)}" placeholder="Field value" />
       </label>
       <select name="customFieldVisibility" aria-label="Custom field visibility">
         <option value="private" ${visibility === "private" ? "selected" : ""}>private</option>
@@ -358,22 +437,10 @@ function syncAccountFormLinkState(form) {
   if (!linkMode || !platform || !mainEmail || !anchorGroup || !anchorSelect || !owner) return;
 
   const mode = linkMode.value === "linkedGoogle" ? "linkedGoogle" : "separate";
-  const googleOption = platform.querySelector('option[value="Google"]');
   anchorGroup.classList.toggle("is-hidden", mode !== "linkedGoogle");
   mainEmail.disabled = mode === "linkedGoogle";
-  if (googleOption) {
-    googleOption.hidden = mode === "linkedGoogle";
-    googleOption.disabled = mode === "linkedGoogle";
-  }
 
   if (mode === "linkedGoogle") {
-    if (platform.value === "Google") {
-      const fallbackPlatform = [...platform.options].find((option) => option.value !== "Google");
-      if (fallbackPlatform) {
-        platform.value = fallbackPlatform.value;
-      }
-    }
-
     const linkedAccount = owner.accounts.find((account) => account.id === anchorSelect.value);
     mainEmail.value = linkedAccount?.mainEmail || "";
   }
@@ -382,12 +449,14 @@ function syncAccountFormLinkState(form) {
 function syncAccountFormPlatformState(form, preferredValue = "") {
   if (!(form instanceof HTMLFormElement)) return;
   const categoryInput = form.querySelector('[name="platformCategory"]');
-  const platformSelect = form.querySelector('select[name="platform"]');
+  const platformInput = form.querySelector('[name="platform"]');
+  const platformGrid = form.querySelector('[data-platform-grid]');
   const categoryButtons = [...form.querySelectorAll("[data-platform-category-button]")];
   const customGroup = form.querySelector("[data-custom-platform-field]");
   const label = form.querySelector("[data-platform-label]");
+  const customVisibleFlag = form.querySelector('[data-custom-platform-visible]');
   const owner = currentOwnerState();
-  if (!categoryInput || !platformSelect || !categoryButtons.length || !customGroup || !label || !owner) return;
+  if (!categoryInput || !platformInput || !platformGrid || !categoryButtons.length || !customGroup || !label || !owner) return;
 
   const activeCategory = normalizePlatformCategory(categoryInput.value || "social");
   const linkMode = form.querySelector('[name="linkMode"]')?.value === "linkedGoogle";
@@ -402,27 +471,30 @@ function syncAccountFormPlatformState(form, preferredValue = "") {
   }
 
   const options = buildPlatformOptions(owner, activeCategory, { linkedGoogleMode: linkMode });
-  const fallbackPlatform = options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? getDefaultPlatformSelection(activeCategory);
+  const fallbackPlatform = getPlatformFallback(owner, activeCategory, linkMode);
   const candidateValue = preferredValue || rememberedValue;
   const displayValue = linkMode && normalizeText(candidateValue) === normalizeText("Google") ? fallbackPlatform : candidateValue;
   const nextValue = options.some((option) => normalizeText(option) === normalizeText(displayValue))
     ? displayValue
     : fallbackPlatform;
 
-  platformSelect.innerHTML = options
+  platformInput.value = nextValue;
+
+  const customVisible = normalizeText(nextValue) === normalizeText("Custom");
+  const buttons = options
     .map((platform) => {
-      const selected = normalizeText(nextValue) === normalizeText(platform);
       const hidden = linkMode && normalizeText(platform) === normalizeText("Google");
-      return `<option value="${escapeHtml(platform)}" ${hidden ? "hidden disabled" : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
+      const selected = normalizeText(nextValue) === normalizeText(platform);
+      return renderPlatformTile(platform, selected, hidden);
     })
     .join("");
-
-  platformSelect.disabled = false;
-  platformSelect.value = nextValue;
+  platformGrid.innerHTML = buttons;
 
   const customName = form.querySelector('[name="customPlatformName"]');
-  const customVisible = normalizeText(nextValue) === normalizeText("Custom");
   customGroup.classList.toggle("is-hidden", !customVisible);
+  if (customVisibleFlag) {
+    customVisibleFlag.value = customVisible ? "true" : "false";
+  }
   if (customName) {
     customName.disabled = !customVisible;
     if (!customVisible && !customName.value.trim()) {
@@ -692,10 +764,14 @@ async function submitAccountForm(form, mode, accountId = null) {
   if (mode === "create") {
     const account = store.createAccount(state.ownerId, state.ownerId, payload);
     state.selectedAccountId = account.id;
+    delete state.secretCache[account.id];
+    delete state.revealedSecrets[account.id];
     setToast("Account created", `${account.label} is now part of your vault.`, "success");
   } else {
     const account = store.updateAccount(state.ownerId, state.ownerId, accountId, payload);
     state.selectedAccountId = account.id;
+    delete state.secretCache[account.id];
+    delete state.revealedSecrets[account.id];
     setToast("Account updated", `${account.label} was saved successfully.`, "success");
   }
   const synced = await store.syncOwner(state.ownerId);
@@ -923,11 +999,27 @@ function renderAccountDetails(owner) {
   }
 
   const enriched = store.getAccount(state.ownerId, account.id);
-  const secretPreview = enriched.secretRecord ? "Encrypted" : "None";
+  const revealed = state.revealedSecrets[enriched.id] ?? false;
+  const secretPreview = revealed ? (state.secretCache[enriched.id] || "••••••••") : (enriched.secretRecord ? "••••••••" : "None");
   const detailRows = [
     enriched.mainEmail ? `<div class="kv"><div class="key">Main email</div><div class="val">${escapeHtml(enriched.mainEmail)}</div></div>` : "",
     enriched.username ? `<div class="kv"><div class="key">Username</div><div class="val">${escapeHtml(enriched.username)}</div></div>` : "",
-    enriched.secretRecord ? `<div class="kv"><div class="key">Secret</div><div class="val">${escapeHtml(secretPreview)}</div></div>` : "",
+    enriched.secretRecord
+      ? `<div class="kv kv-secret">
+          <div class="key">Password / secret</div>
+          <div class="val secret-row">
+            <span class="secret-value ${revealed ? "is-revealed" : "is-masked"}">${escapeHtml(secretPreview)}</span>
+            <div class="secret-actions">
+              <button class="icon-button subtle" type="button" data-action="toggle-secret" data-id="${escapeHtml(enriched.id)}" aria-label="${revealed ? "Hide password" : "Show password"}">
+                ${renderEyeIcon(revealed)}
+              </button>
+              <button class="icon-button subtle" type="button" data-action="copy-secret" data-id="${escapeHtml(enriched.id)}" aria-label="Copy password">
+                ${renderCopyIcon()}
+              </button>
+            </div>
+          </div>
+        </div>`
+      : "",
     `<div class="kv"><div class="key">Updated</div><div class="val">${escapeHtml(formatRelative(enriched.updatedAt))}</div></div>`
   ]
     .filter(Boolean)
@@ -936,8 +1028,8 @@ function renderAccountDetails(owner) {
   return `
     <div class="drawer drawer-compact">
       <div class="drawer-head">
-        <div class="topbar-left compact">
-          <div class="avatar">${escapeHtml(getInitials(enriched.label))}</div>
+        <div class="topbar-left compact drawer-title-row">
+          <div class="drawer-platform-icon">${renderPlatformIcon(enriched.platform)}</div>
           <div>
             <h2>${escapeHtml(enriched.label)}</h2>
             <div class="meta-line">${escapeHtml(enriched.platform)} - ${escapeHtml(enriched.status)}</div>
@@ -1002,8 +1094,7 @@ function renderAccountForm(mode, account, owner) {
   const platformCategory = getPlatformCategoryForPlatform(account?.platform || "social", owner);
   const categoryOptions = PLATFORM_CATEGORY_ORDER.map((key) => ({
     key,
-    label: PLATFORM_CATEGORY_LABELS[key],
-    options: buildPlatformOptions(owner, key, { linkedGoogleMode: linkMode === "linkedGoogle" })
+    label: PLATFORM_CATEGORY_LABELS[key]
   }));
   const accountPlatform = account?.platform ?? "";
   const activePlatformOptions = buildPlatformOptions(owner, platformCategory, { linkedGoogleMode: linkMode === "linkedGoogle" });
@@ -1025,13 +1116,13 @@ function renderAccountForm(mode, account, owner) {
         : ""
     }
 
-    <form id="accountForm" class="account-form">
+    <form id="accountForm" class="account-form" autocomplete="off">
       <div class="form-grid">
         <div class="form-field full">
           <label>Link mode</label>
           <select name="linkMode" data-action="link-mode">
-            <option value="linkedGoogle" ${linkMode === "linkedGoogle" ? "selected" : ""}>Linked to existing Google</option>
-            <option value="separate" ${linkMode === "separate" ? "selected" : ""}>Separate account</option>
+            <option value="linkedGoogle" ${linkMode === "linkedGoogle" ? "selected" : ""}>&#x1F7E2; Linked to existing Google</option>
+            <option value="separate" ${linkMode === "separate" ? "selected" : ""}>&#x1F7E1; Separate account</option>
           </select>
         </div>
 
@@ -1075,15 +1166,7 @@ function renderAccountForm(mode, account, owner) {
 
         <div class="form-field full" data-platform-select-field>
           <label data-platform-label>${escapeHtml(PLATFORM_CATEGORY_LABELS[platformCategory])} platform</label>
-          <select name="platform" data-action="platform-select">
-            ${activePlatformOptions
-              .map((platform) => {
-                const selected = normalizeText(selectedPlatform) === normalizeText(platform);
-                const hidden = linkMode === "linkedGoogle" && normalizeText(platform) === normalizeText("Google");
-                return `<option value="${escapeHtml(platform)}" ${hidden ? "hidden disabled" : ""} ${selected ? "selected" : ""}>${escapeHtml(platform)}</option>`;
-              })
-              .join("")}
-          </select>
+          ${renderPlatformGrid(owner, platformCategory, selectedPlatform, linkMode)}
         </div>
 
         <div class="form-field full ${normalizeText(selectedPlatform) === normalizeText("Custom") ? "" : "is-hidden"}" data-custom-platform-field>
@@ -1097,7 +1180,17 @@ function renderAccountForm(mode, account, owner) {
         </div>
         <div class="form-field">
           <label>Password or secret label</label>
-          <input name="secretValue" type="password" placeholder="Stored encrypted if provided" />
+          <input
+            name="secretValue"
+            type="text"
+            class="masked-input secret-input"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            placeholder="Stored encrypted if provided"
+          />
+          <div class="field-hint">Stored as an encrypted secret instead of a browser credential.</div>
         </div>
         <div class="form-field">
           <label>Status</label>
@@ -1476,6 +1569,8 @@ function bindGlobalEvents() {
         state.session = null;
         state.ownerId = null;
         state.selectedAccountId = null;
+        state.secretCache = {};
+        state.revealedSecrets = {};
         navigate("#signin");
         render();
         break;
@@ -1507,6 +1602,46 @@ function bindGlobalEvents() {
       case "copy-text":
         copyText(value, label || "text");
         break;
+      case "toggle-secret": {
+        const account = store.getAccount(state.ownerId, id);
+        if (!account?.secretRecord) break;
+        const revealed = state.revealedSecrets[id] ?? false;
+        if (revealed) {
+          state.revealedSecrets[id] = false;
+          render();
+          break;
+        }
+        try {
+          const secret = await getAccountSecretValue(id);
+          if (!secret) {
+            setToast("Secret locked", "Unlock your passphrase to reveal this secret.", "danger");
+            break;
+          }
+          state.secretCache[id] = secret;
+          state.revealedSecrets[id] = true;
+          render();
+        } catch (error) {
+          setToast("Secret unavailable", error.message || "Unable to decrypt the secret value.", "danger");
+        }
+        break;
+      }
+      case "copy-secret": {
+        const account = store.getAccount(state.ownerId, id);
+        if (!account?.secretRecord) break;
+        try {
+          const secret = state.secretCache[id] || (await getAccountSecretValue(id));
+          if (!secret) {
+            setToast("Secret locked", "Unlock your passphrase to copy this secret.", "danger");
+            break;
+          }
+          await copyText(secret, "secret");
+          state.revealedSecrets[id] = true;
+          render();
+        } catch (error) {
+          setToast("Copy failed", error.message || "Unable to copy the secret value.", "danger");
+        }
+        break;
+      }
       case "toggle-archive":
         store.archiveAccount(state.ownerId, state.ownerId, id, !(store.getAccount(state.ownerId, id)?.archived ?? false));
         setToast("Archive updated", "The account archive state changed.", "success");
@@ -1528,24 +1663,24 @@ function bindGlobalEvents() {
       case "set-platform-category": {
         const form = target.closest("form");
         const categoryInput = form?.querySelector('[name="platformCategory"]');
-        const platformSelect = form?.querySelector('select[name="platform"]');
         if (categoryInput) {
-          const previousCategory = normalizePlatformCategory(categoryInput.value || "social");
-          if (platformSelect) {
-            state.platformSelections[previousCategory] = platformSelect.value || getDefaultPlatformSelection(previousCategory);
-          }
           categoryInput.value = value || "social";
-          syncAccountFormPlatformState(form, platformSelect?.value || "");
+          syncAccountFormPlatformState(form);
         }
         break;
       }
-      case "platform-select": {
+      case "platform-option": {
         const form = target.closest("form");
         const category = normalizePlatformCategory(form?.querySelector('[name="platformCategory"]')?.value || "social");
-        if (form && target instanceof HTMLSelectElement) {
-          state.platformSelections[category] = target.value;
+        const platformValue = target.dataset.platformValue || "";
+        if (form && platformValue) {
+          state.platformSelections[category] = platformValue;
+          const platformInput = form.querySelector('[name="platform"]');
+          if (platformInput) {
+            platformInput.value = platformValue;
+          }
         }
-        syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
+        syncAccountFormPlatformState(form, platformValue);
         break;
       }
       case "add-custom-field-row": {
@@ -1649,10 +1784,10 @@ function bindGlobalEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
-      syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
+      syncAccountFormPlatformState(form);
       return;
     }
     if (target.matches('input[type="file"][data-import-file]')) {
@@ -1671,10 +1806,10 @@ function bindGlobalEvents() {
       savePassphrase(target.value);
       return;
     }
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
+    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
-      syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
+      syncAccountFormPlatformState(form);
       return;
     }
     if (target.matches('select[name="showArchived"]')) {
