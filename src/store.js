@@ -1190,6 +1190,10 @@ export function createStore() {
       });
       schedulePersist(ownerId);
       return clone(owner.settings);
+    },
+
+    async syncOwner(ownerId) {
+      return flushOwner(ownerId);
     }
   };
 }

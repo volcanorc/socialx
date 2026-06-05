@@ -685,6 +685,10 @@ async function submitAccountForm(form, mode, accountId = null) {
     state.selectedAccountId = account.id;
     setToast("Account updated", `${account.label} was saved successfully.`, "success");
   }
+  const synced = await store.syncOwner(state.ownerId);
+  if (!synced) {
+    setToast("Saved locally", "The account saved locally, but Neon sync needs attention.", "warn");
+  }
   state.modal = null;
   goToDashboard();
   render();
@@ -1515,7 +1519,7 @@ function bindGlobalEvents() {
         if (categoryInput) {
           const previousCategory = normalizePlatformCategory(categoryInput.value || "social");
           if (platformSelect) {
-            state.platformSelections[previousCategory] = state.platformSelections[previousCategory] ?? platformSelect.value ?? getDefaultPlatformSelection(previousCategory);
+            state.platformSelections[previousCategory] = platformSelect.value || getDefaultPlatformSelection(previousCategory);
           }
           categoryInput.value = value || "social";
           syncAccountFormPlatformState(form);
@@ -1619,6 +1623,7 @@ function bindGlobalEvents() {
       try {
         const parsed = JSON.parse(text);
         store.importOwner(state.ownerId, parsed, state.ownerId);
+        await store.syncOwner(state.ownerId);
         setToast("Import complete", "Vault snapshot restored successfully.", "success");
         goToDashboard();
         render();
@@ -1661,6 +1666,7 @@ function bindGlobalEvents() {
     }
     if (target.matches('select[name="showArchived"]')) {
       store.setSettings(state.ownerId, { showArchived: target.value === "true" });
+      await store.syncOwner(state.ownerId);
       render();
       return;
     }
