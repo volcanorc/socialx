@@ -640,7 +640,7 @@ function renderSignIn() {
               <span>Simple account organizer</span>
             </div>
           </div>
-          <h1>Keep all my trash accounts in one place.</h1>
+          <h1>where I keep all trash accounts in one place</h1>
           <p>
             I use SocialX to keep my dummy accounts and forgotten logins organized so I can find them fast.
           </p>
@@ -656,6 +656,52 @@ function renderSignIn() {
             <span>Continue with Google</span>
           </button>
         </div>
+      </section>
+    </main>
+  `;
+}
+
+function renderLoadingSkeleton() {
+  return `
+    <main class="app-shell hero">
+      <section class="hero-card hero-card-skeleton">
+        <div class="skeleton-column">
+          <div class="brand skeleton-brand">
+            <div class="brand-mark skeleton-box skeleton-logo"></div>
+            <div class="brand-title">
+              <div class="skeleton-line skeleton-line-lg"></div>
+              <div class="skeleton-line skeleton-line-sm"></div>
+            </div>
+          </div>
+          <div class="skeleton-line skeleton-line-xl"></div>
+          <div class="skeleton-line skeleton-line-md"></div>
+          <div class="skeleton-line skeleton-line-md short"></div>
+          <div class="skeleton-button-row">
+            <div class="skeleton-pill"></div>
+            <div class="skeleton-pill"></div>
+          </div>
+        </div>
+        <aside class="sign-in-card sign-in-card-skeleton">
+          <div class="skeleton-card-head">
+            <div class="skeleton-avatar skeleton-box"></div>
+            <div class="skeleton-meta">
+              <div class="skeleton-line skeleton-line-md"></div>
+              <div class="skeleton-line skeleton-line-sm"></div>
+            </div>
+          </div>
+          <div class="skeleton-grid">
+            <div class="skeleton-block"></div>
+            <div class="skeleton-block"></div>
+            <div class="skeleton-block"></div>
+            <div class="skeleton-block"></div>
+          </div>
+          <div class="skeleton-line skeleton-line-md"></div>
+          <div class="skeleton-chip-row">
+            <div class="skeleton-chip"></div>
+            <div class="skeleton-chip"></div>
+            <div class="skeleton-chip"></div>
+          </div>
+        </aside>
       </section>
     </main>
   `;
@@ -805,9 +851,9 @@ function renderAccountDetails(owner) {
           </div>
         </div>
       </div>
-      <div class="drawer-grid compact">${detailRows}</div>
-      ${enriched.notes ? `<div class="drawer-section"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
-      <div class="inline-actions compact">
+      <div class="drawer-section drawer-summary-grid">${detailRows}</div>
+      ${enriched.notes ? `<div class="drawer-section drawer-notes"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
+      <div class="drawer-actions">
         ${enriched.mainEmail ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail)}" data-label="email">Copy email</button>` : ""}
         ${enriched.username ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username)}" data-label="username">Copy username</button>` : ""}
         <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
@@ -1244,26 +1290,7 @@ function renderDashboard() {
 
 function render() {
   if (state.loading) {
-    app.innerHTML = `
-      <main class="app-shell hero">
-        <section class="hero-card">
-          <div class="hero-copy">
-            <div class="brand">
-              <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
-              <div class="brand-title">
-                <strong>${escapeHtml(config.appName)}</strong>
-                <span>Loading secure auth and vault state</span>
-              </div>
-            </div>
-            <h1>Preparing your identity graph.</h1>
-            <p>Please wait while SocialX checks your Neon Auth session and loads the vault workspace.</p>
-          </div>
-          <aside class="sign-in-card">
-            <div class="note-box">If auth fails, confirm the hosted Neon Auth URL and trusted domains are set correctly.</div>
-          </aside>
-        </section>
-      </main>
-    `;
+    app.innerHTML = renderLoadingSkeleton();
     return;
   }
 
