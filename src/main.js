@@ -749,6 +749,7 @@ function syncRoute() {
   }
   if (state.session && route.name === "account-edit" && route.accountId) {
     state.selectedAccountId = route.accountId;
+    state.modal = { mode: "account-edit", accountId: route.accountId };
   }
 }
 
@@ -923,6 +924,9 @@ async function submitAccountForm(form, mode, accountId = null) {
   const secretRecord = draft.secretValue
     ? await encryptSecret(draft.secretValue, state.passphrase || "")
     : null;
+  const existingAccount = mode === "edit" && accountId ? store.getAccount(state.ownerId, accountId) : null;
+  const preserveArchived = Boolean(existingAccount?.archived);
+  const preservedStatus = preserveArchived ? "archived" : draft.status;
   const customFields = await Promise.all(
     draft.customFields.map(async (field) => {
       if (field.valueType === "secret" && field.valueText) {
@@ -940,7 +944,9 @@ async function submitAccountForm(form, mode, accountId = null) {
     ...draft,
     platform,
     secretRecord,
-    customFields
+    customFields,
+    archived: preserveArchived ? true : Boolean(draft.archived ?? false),
+    status: preservedStatus
   };
 
   if (mode === "create") {
@@ -1674,7 +1680,7 @@ function renderDashboard() {
         <main class="content wide">
           ${renderTopbar(owner)}
           ${renderFilters(owner)}
-          ${isAccountEditorRoute() ? renderAccountEditorWorkspace(owner) : `
+          ${getRoute().name === "account-create" ? renderAccountEditorWorkspace(owner) : `
             <section class="workspace single">
               <div class="panel list-panel">
                 <div class="list-toolbar">
@@ -1745,16 +1751,17 @@ function bindGlobalEvents() {
   };
 
   document.addEventListener("click", async (event) => {
-    const target = event.target.closest("[data-action]");
+    const rawTarget = event.target instanceof Element ? event.target : null;
+    let target = rawTarget?.closest("[data-action]") ?? null;
+    const backdrop = rawTarget?.closest(".modal-backdrop") ?? null;
+    if (backdrop && target === backdrop && rawTarget !== backdrop) {
+      target = rawTarget.closest(".modal") ? null : target;
+    }
     if (!target) return;
     const action = target.dataset.action;
     const value = target.dataset.value ?? "";
     const id = target.dataset.id ?? "";
     const label = target.dataset.label ?? "";
-
-    if (target.closest(".modal-backdrop") && target.dataset.action !== "close-modal") {
-      event.stopPropagation();
-    }
 
     switch (action) {
       case "sign-in-google":
