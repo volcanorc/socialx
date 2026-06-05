@@ -177,20 +177,26 @@ const PLATFORM_ICON_ASSETS = {
   atome: "../assets/platform-icons/bank/atome.png",
   binance: "../assets/platform-icons/bank/binance.png",
   "home credit": "../assets/platform-icons/bank/home-credit.png",
+  homecredit: "../assets/platform-icons/bank/home-credit.png",
   "metrobank": "../assets/platform-icons/bank/metrobank.png",
+  "metro bank": "../assets/platform-icons/bank/metrobank.png",
   pnb: "../assets/platform-icons/bank/pnb.png",
   rcbc: "../assets/platform-icons/bank/rcbc.png",
   seabank: "../assets/platform-icons/bank/seabank.png",
   "security bank": "../assets/platform-icons/bank/security-bank.png",
+  securitybank: "../assets/platform-icons/bank/security-bank.png",
   "unionbank": "../assets/platform-icons/bank/unionbank.png",
+  "union bank": "../assets/platform-icons/bank/unionbank.png",
   "tin id": "../assets/platform-icons/government/bir.png",
   tin: "../assets/platform-icons/government/bir.png",
   bir: "../assets/platform-icons/government/bir.png",
   pagibig: "../assets/platform-icons/government/pag-ibig.png",
   "pag-ibig": "../assets/platform-icons/government/pag-ibig.png",
+  "pag ibig": "../assets/platform-icons/government/pag-ibig.png",
   nbi: "../assets/platform-icons/government/nbi.png",
   philsys: "../assets/platform-icons/government/philsys.png",
   egovph: "../assets/platform-icons/government/egovph.png",
+  "e gov ph": "../assets/platform-icons/government/egovph.png",
   pnp: "../assets/platform-icons/government/pnp.png"
 };
 
@@ -211,7 +217,13 @@ function renderPlatformIcon(platform = "") {
     `;
   }
 
-  return `<span class="platform-icon platform-fallback platform-${tone}" aria-hidden="true">${escapeHtml(platformInitial(platform))}</span>`;
+  return `
+    <span class="platform-icon platform-fallback platform-${tone}" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="12" height="12" focusable="false">
+        <circle cx="12" cy="12" r="7.5" fill="currentColor" opacity="0.75"></circle>
+      </svg>
+    </span>
+  `;
 }
 
 function renderPlatformBadge(platform = "") {
