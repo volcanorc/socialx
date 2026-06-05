@@ -1516,6 +1516,15 @@ a {
   padding: 14px;
 }
 
+.account-details-backdrop {
+  z-index: 20;
+}
+
+.account-details-modal {
+  width: min(720px, 100%);
+  max-height: min(90vh, 920px);
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -1527,6 +1536,67 @@ a {
 .modal-head h2 {
   margin: 0;
   font-size: 1.2rem;
+}
+
+.account-details-head {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.account-details-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.account-details-title-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-details-title-wrap h2 {
+  margin: 0;
+}
+
+.updated-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid rgba(112, 225, 166, 0.18);
+  background: rgba(112, 225, 166, 0.12);
+  color: #d8ffe8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.account-details-status {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.account-details-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.account-details-back {
+  display: none;
+}
+
+.account-edit-modal .modal-scroll-shell {
+  min-height: 0;
+  overflow: auto;
 }
 
 .form-grid {
@@ -1815,5 +1885,38 @@ mark {
   .topbar-left,
   .topbar-actions {
     width: 100%;
+  }
+
+  .account-details-backdrop {
+    padding: 0;
+    place-items: stretch;
+  }
+
+  .account-details-modal,
+  .account-edit-modal {
+    width: 100vw;
+    height: 100vh;
+    max-height: none;
+    border-radius: 0;
+    padding: 16px;
+  }
+
+  .account-details-head {
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    background: inherit;
+    backdrop-filter: blur(10px);
+  }
+
+  .account-details-back {
+    display: inline-flex;
+  }
+
+  .account-details-close {
+    display: none;
   }
 }

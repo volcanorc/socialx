@@ -726,7 +726,8 @@ function openAccountEditor(accountId = null) {
   state.modal = null;
   if (accountId) {
     state.selectedAccountId = accountId;
-    navigate(`#accounts/${encodeURIComponent(accountId)}/edit`);
+    state.modal = { mode: "account-edit", accountId, returnTo: "account-details" };
+    render();
     return;
   }
   state.selectedAccountId = null;
@@ -805,8 +806,10 @@ function currentOwnerState() {
 
 function currentAccounts() {
   if (!state.ownerId) return [];
-  return store.listAccounts(state.ownerId, state.filtersWithQuery ?? {
+  const archivedFilter = normalizeText(state.filters.status) === "archived" ? "all" : (state.filters.archived ?? "active");
+  return store.listAccounts(state.ownerId, {
     ...state.filters,
+    archived: archivedFilter,
     query: state.search
   });
 }
@@ -818,6 +821,7 @@ function selectedAccount() {
 
 function setSelected(accountId) {
   state.selectedAccountId = accountId;
+  state.modal = { mode: "account-details", accountId };
   render();
 }
 
@@ -828,6 +832,12 @@ function openModal(modal) {
 }
 
 function closeModal() {
+  if (state.modal?.mode === "account-edit" && state.modal.accountId) {
+    state.modal = { mode: "account-details", accountId: state.modal.accountId };
+    state.duplicateWarnings = [];
+    render();
+    return;
+  }
   state.modal = null;
   state.duplicateWarnings = [];
   render();
@@ -950,8 +960,12 @@ async function submitAccountForm(form, mode, accountId = null) {
   if (!synced) {
     setToast("Saved locally", "The account saved locally, but Neon sync needs attention.", "warn");
   }
-  state.modal = null;
-  goToDashboard();
+  if (mode === "edit") {
+    state.modal = { mode: "account-details", accountId: state.selectedAccountId, justUpdated: true };
+  } else {
+    state.modal = null;
+    goToDashboard();
+  }
   render();
 }
 
@@ -1184,15 +1198,7 @@ function renderAccountList(owner) {
   `;
 }
 
-function renderAccountDetails(owner) {
-  const account = selectedAccount();
-  if (!account) {
-    return "";
-  }
-
-  const enriched = store.getAccount(state.ownerId, account.id);
-  const revealed = state.revealedSecrets[enriched.id] ?? false;
-  const secretPreview = revealed ? (state.secretCache[enriched.id] || "••••••••") : (enriched.secretRecord ? "••••••••" : "None");
+function renderAccountDetailsBody(owner, enriched, revealed, secretPreview) {
   const detailRows = [
     enriched.mainEmail ? `<div class="kv"><div class="key">Main email</div><div class="val truncate">${escapeHtml(enriched.mainEmail)}</div></div>` : "",
     enriched.username ? `<div class="kv"><div class="key">Username</div><div class="val truncate">${escapeHtml(enriched.username)}</div></div>` : "",
@@ -1218,26 +1224,48 @@ function renderAccountDetails(owner) {
     .join("");
 
   return `
-    <div class="drawer drawer-compact">
-      <div class="drawer-head">
-        <div class="topbar-left compact drawer-title-row">
-          <div class="drawer-platform-icon">${renderPlatformIcon(enriched.platform)}</div>
-          <div>
-            <h2 class="truncate">${escapeHtml(enriched.platform)}</h2>
+    <div class="drawer-section drawer-summary-grid">${detailRows}</div>
+    ${enriched.notes ? `<div class="drawer-section drawer-notes"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
+    <div class="drawer-actions">
+      ${enriched.mainEmail ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail)}" data-label="email">Copy email</button>` : ""}
+      ${enriched.username ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username)}" data-label="username">Copy username</button>` : ""}
+      <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
+      <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
+      <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
+    </div>
+    ${renderLinkedAccountSection(owner, enriched, { title: enriched.platform === "Google" ? "Linked accounts" : "Linked to" })}
+  `;
+}
+
+function renderAccountDetailsModal(owner) {
+  const account = selectedAccount();
+  if (!account) {
+    return "";
+  }
+
+  const enriched = store.getAccount(state.ownerId, account.id);
+  const revealed = state.revealedSecrets[enriched.id] ?? false;
+  const secretPreview = revealed ? (state.secretCache[enriched.id] || "••••••••") : (enriched.secretRecord ? "••••••••" : "None");
+  const justUpdated = state.modal?.justUpdated && state.modal?.accountId === enriched.id;
+  return `
+    <div class="modal-backdrop account-details-backdrop" data-action="close-modal">
+      <div class="modal account-details-modal" role="dialog" aria-modal="true" aria-labelledby="accountDetailsTitle">
+        <div class="modal-head account-details-head">
+          <div class="account-details-head-left">
+            <div class="drawer-platform-icon">${renderPlatformIcon(enriched.platform)}</div>
+            <span class="account-details-status">${renderStatusDot(enriched.status)}</span>
+            <div class="account-details-title-wrap">
+              <h2 class="truncate" id="accountDetailsTitle">${escapeHtml(enriched.platform)}</h2>
+              ${justUpdated ? `<span class="updated-pill">Updated</span>` : ""}
+            </div>
+          </div>
+          <div class="account-details-head-actions">
+            <button class="secondary-button account-details-back" type="button" data-action="close-modal">Back</button>
+            <button class="icon-button account-details-close" data-action="close-modal" aria-label="Close">×</button>
           </div>
         </div>
-        ${renderStatusDot(enriched.status)}
+        ${renderAccountDetailsBody(owner, enriched, revealed, secretPreview)}
       </div>
-      <div class="drawer-section drawer-summary-grid">${detailRows}</div>
-      ${enriched.notes ? `<div class="drawer-section drawer-notes"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
-      <div class="drawer-actions">
-        ${enriched.mainEmail ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.mainEmail)}" data-label="email">Copy email</button>` : ""}
-        ${enriched.username ? `<button class="secondary-button" data-action="copy-text" data-value="${escapeHtml(enriched.username)}" data-label="username">Copy username</button>` : ""}
-        <button class="secondary-button" data-action="open-edit" data-id="${escapeHtml(enriched.id)}">Edit</button>
-        <button class="ghost-button" data-action="toggle-archive" data-id="${escapeHtml(enriched.id)}">${enriched.archived ? "Restore" : "Archive"}</button>
-        <button class="danger-button" data-action="delete-account" data-id="${escapeHtml(enriched.id)}">Delete</button>
-      </div>
-      ${renderLinkedAccountSection(owner, enriched, { title: enriched.platform === "Google" ? "Linked accounts" : "Linked to" })}
     </div>
   `;
 }
@@ -1297,6 +1325,10 @@ function renderAccountForm(mode, account, owner) {
     : rememberedSelection;
   const customPlatformName = knownPlatform || !accountPlatform ? "" : accountPlatform;
   const customRows = mode === "edit" && account?.customFields.length ? account.customFields : [];
+  const editableStatusOptions = STATUS_OPTIONS.filter((status) => normalizeText(status) !== normalizeText("archived"));
+  const selectedStatus = account?.status && editableStatusOptions.some((status) => normalizeText(status) === normalizeText(account.status))
+    ? account.status
+    : "active";
 
   return `
     ${
@@ -1381,7 +1413,7 @@ function renderAccountForm(mode, account, owner) {
         <div class="form-field">
           <label>Status</label>
           <select name="status">
-            ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${(account?.status ?? "active") === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
+            ${editableStatusOptions.map((status) => `<option value="${escapeHtml(status)}" ${normalizeText(selectedStatus) === normalizeText(status) ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
           </select>
         </div>
         <div class="form-field full">
@@ -1415,7 +1447,7 @@ function renderAccountEditorWorkspace(owner) {
   const title = mode === "edit" ? `Edit ${account?.label ?? "account"}` : "Add account";
   if (mode === "edit" && !account) {
     return `
-      <section class="workspace">
+      <section class="workspace single">
         <div class="panel list-panel editor-panel">
           <div class="list-toolbar">
             <div>
@@ -1427,12 +1459,11 @@ function renderAccountEditorWorkspace(owner) {
             </div>
           </div>
         </div>
-        ${renderAccountDetails(owner)}
       </section>
     `;
   }
   return `
-    <section class="workspace">
+    <section class="workspace single">
       <div class="panel list-panel editor-panel">
         <div class="list-toolbar">
           <div>
@@ -1445,7 +1476,6 @@ function renderAccountEditorWorkspace(owner) {
         </div>
         ${renderAccountForm(mode, account, owner)}
       </div>
-      ${renderAccountDetails(owner)}
     </section>
   `;
 }
@@ -1469,23 +1499,38 @@ function renderModal() {
   if (!state.modal || !state.ownerId) return "";
   const owner = currentOwnerState();
   const mode = state.modal.mode;
-  const account = mode === "edit" ? store.getAccount(state.ownerId, state.modal.accountId) : null;
-  const title = mode === "edit" ? `Edit ${account?.label ?? "account"}` : "Add account";
+  if (mode === "account-details") {
+    return renderAccountDetailsModal(owner);
+  }
 
-  return `
-    <div class="modal-backdrop" data-action="close-modal">
-      <div class="modal modal-form-shell" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
-        <div class="modal-head">
-          <div>
-            <h2 id="accountModalTitle">${escapeHtml(title)}</h2>
-            <div class="meta-line">A simple account form with Google linking and custom fields.</div>
+  if (mode === "account-edit") {
+    const account = store.getAccount(state.ownerId, state.modal.accountId);
+    if (!account) return "";
+    return `
+      <div class="modal-backdrop account-details-backdrop" data-action="close-modal">
+        <div class="modal account-details-modal account-edit-modal" role="dialog" aria-modal="true" aria-labelledby="accountEditTitle">
+          <div class="modal-head account-details-head">
+            <div class="account-details-head-left">
+              <div class="drawer-platform-icon">${renderPlatformIcon(account.platform)}</div>
+              <span class="account-details-status">${renderStatusDot(account.status)}</span>
+              <div class="account-details-title-wrap">
+                <h2 id="accountEditTitle">Edit ${escapeHtml(account.label ?? "account")}</h2>
+              </div>
+            </div>
+            <div class="account-details-head-actions">
+              <button class="secondary-button account-details-back" type="button" data-action="close-modal">Back</button>
+              <button class="icon-button account-details-close" data-action="close-modal" aria-label="Close">×</button>
+            </div>
           </div>
-          <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
+          <div class="modal-scroll-shell">
+            ${renderAccountForm("edit", account, owner)}
+          </div>
         </div>
-        ${renderAccountForm(mode, account, owner)}
       </div>
-    </div>
-  `;
+    `;
+  }
+
+  return "";
 }
 
 function renderImportPage() {
@@ -1630,7 +1675,7 @@ function renderDashboard() {
           ${renderTopbar(owner)}
           ${renderFilters(owner)}
           ${isAccountEditorRoute() ? renderAccountEditorWorkspace(owner) : `
-            <section class="workspace ${selectedAccount() ? "has-drawer" : "single"}">
+            <section class="workspace single">
               <div class="panel list-panel">
                 <div class="list-toolbar">
                   <div>
@@ -1642,13 +1687,11 @@ function renderDashboard() {
                   <div class="inline-actions">
                     <button class="secondary-button" type="button" data-action="open-import">Import</button>
                     <button class="secondary-button" type="button" data-action="open-export">Export</button>
-                    <button class="secondary-button" type="button" data-action="open-settings">Settings</button>
                     <button class="primary-button" type="button" data-action="open-create">Add account</button>
                   </div>
                 </div>
                 <div data-region="account-list">${renderAccountList(owner)}</div>
               </div>
-              ${renderAccountDetails(owner)}
             </section>
           `}
         </main>
@@ -1677,41 +1720,8 @@ function render() {
     syncAccountFormLinkState(accountForm);
     syncAccountFormPlatformState(accountForm);
   }
-  if (state.modal?.mode === "settings") {
-    const owner = currentOwnerState();
-    app.insertAdjacentHTML(
-      "beforeend",
-      `
-        <div class="modal-backdrop" data-action="close-modal">
-          <div class="modal">
-            <div class="modal-head">
-              <div>
-                <h2>Settings</h2>
-                <div class="meta-line">Vault passphrase, archive behavior, and export/import safety controls.</div>
-              </div>
-              <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
-            </div>
-            <div class="form-grid">
-              <div class="form-field full">
-                <label>Vault passphrase</label>
-                <input name="vaultPassphrase" value="${escapeHtml(state.passphrase)}" placeholder="Optional local encryption passphrase" />
-              </div>
-              <div class="form-field full">
-                <label>Archive preference</label>
-                <select name="showArchived">
-                  <option value="false" ${owner.settings?.showArchived ? "" : "selected"}>Hide archived by default</option>
-                  <option value="true" ${owner.settings?.showArchived ? "selected" : ""}>Show archived by default</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-actions">
-              <button class="secondary-button" data-action="close-modal">Cancel</button>
-              <button class="primary-button" data-action="save-settings">Save settings</button>
-            </div>
-          </div>
-        </div>
-      `
-    );
+  if (state.modal) {
+    app.insertAdjacentHTML("beforeend", renderModal());
   }
 
   if (state.toast) {
@@ -1730,6 +1740,10 @@ function render() {
 }
 
 function bindGlobalEvents() {
+  const closeFilterMenus = () => {
+    document.querySelectorAll('details[data-filter-menu][open]').forEach((menu) => menu.removeAttribute("open"));
+  };
+
   document.addEventListener("click", async (event) => {
     const target = event.target.closest("[data-action]");
     if (!target) return;
@@ -1773,9 +1787,6 @@ function bindGlobalEvents() {
       case "open-export":
         navigate("#export");
         render();
-        break;
-      case "open-settings":
-        openModal({ mode: "settings" });
         break;
       case "close-modal":
         closeModal();
@@ -1933,6 +1944,17 @@ function bindGlobalEvents() {
     }
   });
 
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("details[data-filter-menu]")) return;
+    closeFilterMenus();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeFilterMenus();
+    }
+  });
+
   document.addEventListener("input", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
@@ -1963,8 +1985,13 @@ function bindGlobalEvents() {
     if (form.id === "accountForm") {
       event.preventDefault();
       const route = getRoute();
-      const editorAccountId = route.name === "account-edit" ? route.accountId : null;
-      const mode = route.name === "account-edit" ? "edit" : "create";
+      const modalMode = state.modal?.mode === "account-edit" ? "edit" : null;
+      const editorAccountId = modalMode === "edit"
+        ? state.modal.accountId
+        : route.name === "account-edit"
+          ? route.accountId
+          : null;
+      const mode = modalMode === "edit" || route.name === "account-edit" ? "edit" : "create";
       const warnings = await evaluateDuplicates(form, editorAccountId ?? null);
       if (warnings.length && !confirm("Possible duplicates were found. Save anyway?")) {
         return;
