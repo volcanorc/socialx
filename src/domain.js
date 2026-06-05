@@ -8,9 +8,40 @@ export const PLATFORM_OPTIONS = [
   "Steam",
   "Riot / Valorant",
   "Epic Games",
+  "CF",
+  "GitHub",
+  "Globe One",
+  "Lazada",
+  "LinkedIn",
+  "Shopee",
+  "Telegram",
+  "Upwork",
+  "Viber",
+  "WhatsApp",
+  "YouTube",
+  "Zoom",
   "PayPal",
-  "Bank",
-  "Government",
+  "Coins.ph",
+  "GCash",
+  "Maya Bank",
+  "BDO",
+  "GoTyme",
+  "Atome",
+  "Binance",
+  "BPI",
+  "Home Credit",
+  "MetroBank",
+  "PNB",
+  "RCBC",
+  "SeaBank",
+  "Security Bank",
+  "UnionBank",
+  "BIR",
+  "eGOVph",
+  "NBI",
+  "PAG-IBIG",
+  "PhilSys",
+  "PNP",
   "Custom"
 ];
 
@@ -21,9 +52,9 @@ export const PLATFORM_CATEGORY_LABELS = {
 };
 
 export const PLATFORM_CATEGORY_OPTIONS = {
-  social: ["Google", "Facebook", "Instagram", "TikTok", "X / Twitter", "Discord", "Steam", "Riot / Valorant", "Epic Games"],
-  bank: ["PayPal", "Coins.ph", "GCash", "Maya", "BDO", "GoTyme", "Atome"],
-  government: ["TIN ID", "PAGIBIG", "PhilHealth", "NBI", "PhilSys", "eGOVph", "PNP"]
+  social: ["CF", "Discord", "Facebook", "GitHub", "Globe One", "Google", "Instagram", "Lazada", "LinkedIn", "Shopee", "Steam", "Telegram", "TikTok", "X / Twitter", "Upwork", "Valorant", "Viber", "WhatsApp", "YouTube", "Zoom"],
+  bank: ["Atome", "BDO", "Binance", "BPI", "Coins.ph", "GCash", "GoTyme", "Home Credit", "Maya Bank", "MetroBank", "PayPal", "PNB", "RCBC", "SeaBank", "Security Bank", "UnionBank"],
+  government: ["BIR", "eGOVph", "NBI", "PAG-IBIG", "PhilSys", "PNP"]
 };
 
 export const PLATFORM_CATEGORY_ORDER = ["social", "bank", "government"];

@@ -133,23 +133,47 @@ const PLATFORM_ICON_ASSETS = {
   facebook: "../assets/platform-icons/social/facebook.png",
   instagram: "../assets/platform-icons/social/instagram.png",
   tiktok: "../assets/platform-icons/social/tiktok.png",
+  cf: "../assets/platform-icons/social/cf.png",
+  github: "../assets/platform-icons/social/github.png",
+  "globe one": "../assets/platform-icons/social/globe-one.png",
+  globeone: "../assets/platform-icons/social/globe-one.png",
   "x / twitter": "../assets/platform-icons/social/twitter.png",
   twitter: "../assets/platform-icons/social/twitter.png",
   x: "../assets/platform-icons/social/twitter.png",
   discord: "../assets/platform-icons/social/discord.png",
   steam: "../assets/platform-icons/social/steam.png",
+  lazada: "../assets/platform-icons/social/lazada.png",
+  linkedin: "../assets/platform-icons/social/linkedin.png",
+  shopee: "../assets/platform-icons/social/shopee.png",
+  telegram: "../assets/platform-icons/social/telegram.png",
   "riot / valorant": "../assets/platform-icons/social/valorant.png",
   riot: "../assets/platform-icons/social/valorant.png",
   valorant: "../assets/platform-icons/social/valorant.png",
+  viber: "../assets/platform-icons/social/viber.png",
+  whatsapp: "../assets/platform-icons/social/whatsapp.png",
+  youtube: "../assets/platform-icons/social/youtube.png",
+  zoom: "../assets/platform-icons/social/zoom.png",
   paypal: "../assets/platform-icons/bank/paypal.png",
   "coins.ph": "../assets/platform-icons/bank/coins-ph.png",
+  "coins ph": "../assets/platform-icons/bank/coins-ph.png",
   gcash: "../assets/platform-icons/bank/gcash.png",
   maya: "../assets/platform-icons/bank/maya-bank.png",
+  "maya bank": "../assets/platform-icons/bank/maya-bank.png",
   bdo: "../assets/platform-icons/bank/bdo.png",
+  bpi: "../assets/platform-icons/bank/bpi.png",
   gotyme: "../assets/platform-icons/bank/gotyme.png",
   atome: "../assets/platform-icons/bank/atome.png",
+  binance: "../assets/platform-icons/bank/binance.png",
+  "home credit": "../assets/platform-icons/bank/home-credit.png",
+  "metrobank": "../assets/platform-icons/bank/metrobank.png",
+  pnb: "../assets/platform-icons/bank/pnb.png",
+  rcbc: "../assets/platform-icons/bank/rcbc.png",
+  seabank: "../assets/platform-icons/bank/seabank.png",
+  "security bank": "../assets/platform-icons/bank/security-bank.png",
+  "unionbank": "../assets/platform-icons/bank/unionbank.png",
   "tin id": "../assets/platform-icons/government/bir.png",
   tin: "../assets/platform-icons/government/bir.png",
+  bir: "../assets/platform-icons/government/bir.png",
   pagibig: "../assets/platform-icons/government/pag-ibig.png",
   "pag-ibig": "../assets/platform-icons/government/pag-ibig.png",
   nbi: "../assets/platform-icons/government/nbi.png",
@@ -193,11 +217,11 @@ function accountDisplayName(account) {
 
 function getPlatformCategoryForPlatform(platform = "", owner = null) {
   const normalized = normalizeText(platform);
-  if (["paypal", "coins.ph", "gcash", "maya", "bdo", "gotyme", "atome", "bank"].some((entry) => normalized.includes(normalizeText(entry)))) {
-    return "bank";
-  }
-  if (["tin", "pagibig", "philhealth", "nbi", "philsys", "egovph", "pnp", "government", "id"].some((entry) => normalized.includes(normalizeText(entry)))) {
-    return "government";
+  for (const category of PLATFORM_CATEGORY_ORDER) {
+    const builtIn = getPlatformOptionsForCategory(category);
+    if (builtIn.some((entry) => normalizeText(entry) === normalized)) {
+      return category;
+    }
   }
   const customPlatforms = owner?.settings?.customPlatforms ?? {};
   for (const category of PLATFORM_CATEGORY_ORDER) {
