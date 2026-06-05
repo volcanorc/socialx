@@ -465,7 +465,8 @@ a {
 }
 
 .filter-group select,
-.filter-group input {
+.filter-group input,
+.filter-menu-trigger {
   height: 34px;
   min-width: 136px;
   border-radius: 9px;
@@ -473,6 +474,109 @@ a {
   background: #fff;
   color: var(--text);
   padding: 0 10px;
+}
+
+.filter-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.filter-menu summary {
+  list-style: none;
+}
+
+.filter-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.filter-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-menu-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12);
+  display: grid;
+  gap: 6px;
+}
+
+.filter-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.filter-menu-item:hover,
+.filter-menu-item.is-selected {
+  background: rgba(97, 215, 199, 0.08);
+  border-color: rgba(97, 215, 199, 0.18);
+}
+
+.filter-option-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+}
+
+.filter-option-neutral,
+.filter-trigger-neutral,
+.filter-dot-neutral {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.4);
+  display: inline-block;
+}
+
+.filter-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.filter-good {
+  background: #34d399;
+}
+
+.filter-warn {
+  background: #fbbf24;
+}
+
+.filter-danger {
+  background: #ef4444;
+}
+
+.filter-dark {
+  background: #94a3b8;
+}
+
+.filter-pending {
+  background: #fb923c;
 }
 
 .filter-group.chips {
@@ -793,6 +897,10 @@ a {
   font-size: 1rem;
 }
 
+.account-card-header .badge.platform {
+  max-width: 100%;
+}
+
 .account-title span,
 .meta-line {
   color: var(--muted);
@@ -965,6 +1073,101 @@ a {
   gap: 10px;
   min-width: 0;
   overflow: hidden;
+}
+
+.card-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.card-preview-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-linked-slot {
+  justify-self: end;
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.card-linked-single {
+  padding: 0.28rem 0.54rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.card-linked-single .platform-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.card-linked-single span:last-child {
+  display: inline-block;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.card-linked-stack {
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.avatar-stack {
+  display: inline-flex;
+  align-items: center;
+}
+
+.stack-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  overflow: hidden;
+  display: inline-grid;
+  place-items: center;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+.stack-avatar + .stack-avatar {
+  margin-left: -8px;
+}
+
+.stack-avatar .platform-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.stack-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  margin-left: -8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 .account-preview mark,

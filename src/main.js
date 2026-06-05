@@ -177,6 +177,28 @@ function renderStatusDot(status = "active") {
   return `<span class="status-dot status-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
 }
 
+function renderFilterStatusDot(status = "") {
+  const normalized = normalizeText(status);
+  if (!normalized || normalized === "all") {
+    return `<span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>`;
+  }
+  const tone =
+    normalized === "active"
+      ? "good"
+      : normalized === "paused"
+        ? "warn"
+        : normalized === "locked"
+          ? "danger"
+          : normalized === "archived"
+            ? "dark"
+            : "pending";
+  return `<span class="filter-dot filter-${tone}" aria-hidden="true"></span>`;
+}
+
+function renderFilterMenuItemIcon(platform = "") {
+  return `<span class="filter-option-icon">${renderPlatformIcon(platform)}</span>`;
+}
+
 function cleanAnchorLabel(entry = {}) {
   const raw = (entry.mainEmail || entry.label || entry.platform || "Google").toString().trim();
   if (!raw) return "Google";
@@ -507,6 +529,39 @@ function renderLinkedAccountSection(owner, account, options = {}) {
         ${chips}
         ${extraCount ? `<span class="linked-chip-more">+${extraCount} more</span>` : ""}
       </div>
+    </div>
+  `;
+}
+
+function renderCardLinkedIndicator(owner, account) {
+  if (!owner || !account) return "";
+  if (account.platform === "Google") {
+    const linkedAccounts = getLinkedAccountsForDisplay(owner, account);
+    if (!linkedAccounts.length) return "";
+    const visible = linkedAccounts.slice(0, 3);
+    const extraCount = linkedAccounts.length - visible.length;
+    return `
+      <div class="card-linked-slot card-linked-stack" aria-label="Linked accounts">
+        <div class="avatar-stack" aria-hidden="true">
+          ${visible
+            .map((entry) => `
+              <span class="stack-avatar" title="${escapeHtml(entry.platform)}" aria-label="${escapeHtml(entry.platform)}">
+                ${renderPlatformIcon(entry.platform)}
+              </span>
+            `)
+            .join("")}
+          ${extraCount > 0 ? `<span class="stack-more">+${extraCount}</span>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  const anchor = getGoogleAnchorAccount(owner, account);
+  if (!anchor) return "";
+  return `
+    <div class="card-linked-slot card-linked-single" title="Linked to Google" aria-label="Linked to Google">
+      ${renderPlatformIcon("Google")}
+      <span>Linked to Google</span>
     </div>
   `;
 }
@@ -1005,17 +1060,52 @@ function renderSummary(owner) {
 
 function renderFilters(owner) {
   const platformSet = [...new Set(owner.accounts.map((account) => account.platform))].sort();
+  const selectedPlatform = state.filters.platform === "all" ? "" : state.filters.platform;
+  const selectedStatus = state.filters.status === "all" ? "" : state.filters.status;
+  const platformLabel = selectedPlatform || "All platforms";
+  const statusLabel = selectedStatus || "All statuses";
   return `
     <section class="filter-bar">
       <div class="filter-group">
-        <select data-action="filter-platform">
-          <option value="all">All platforms</option>
-          ${platformSet.map((platform) => `<option value="${escapeHtml(platform)}" ${state.filters.platform === platform ? "selected" : ""}>${escapeHtml(platform)}</option>`).join("")}
-        </select>
-        <select data-action="filter-status">
-          <option value="all">All statuses</option>
-          ${STATUS_OPTIONS.map((status) => `<option value="${escapeHtml(status)}" ${state.filters.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
-        </select>
+        <details class="filter-menu" data-filter-menu>
+          <summary class="filter-menu-trigger">
+            ${selectedPlatform ? renderPlatformIcon(selectedPlatform) : `<span class="filter-trigger-neutral" aria-hidden="true"></span>`}
+            <span>${escapeHtml(platformLabel)}</span>
+          </summary>
+          <div class="filter-menu-list" role="menu" aria-label="Platform filter options">
+            <button type="button" class="filter-menu-item ${state.filters.platform === "all" ? "is-selected" : ""}" data-action="filter-platform" data-value="all">
+              <span class="filter-option-icon filter-option-neutral" aria-hidden="true"></span>
+              <span>All platforms</span>
+            </button>
+            ${platformSet
+              .map((platform) => `
+                <button type="button" class="filter-menu-item ${state.filters.platform === platform ? "is-selected" : ""}" data-action="filter-platform" data-value="${escapeHtml(platform)}">
+                  ${renderFilterMenuItemIcon(platform)}
+                  <span>${escapeHtml(platform)}</span>
+                </button>
+              `)
+              .join("")}
+          </div>
+        </details>
+
+        <details class="filter-menu" data-filter-menu>
+          <summary class="filter-menu-trigger">
+            ${selectedStatus ? renderFilterStatusDot(selectedStatus) : `<span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>`}
+            <span>${escapeHtml(statusLabel)}</span>
+          </summary>
+          <div class="filter-menu-list" role="menu" aria-label="Status filter options">
+            <button type="button" class="filter-menu-item ${state.filters.status === "all" ? "is-selected" : ""}" data-action="filter-status" data-value="all">
+              <span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>
+              <span>All statuses</span>
+            </button>
+            ${STATUS_OPTIONS.map((status) => `
+              <button type="button" class="filter-menu-item ${state.filters.status === status ? "is-selected" : ""}" data-action="filter-status" data-value="${escapeHtml(status)}">
+                ${renderFilterStatusDot(status)}
+                <span>${escapeHtml(status)}</span>
+              </button>
+            `).join("")}
+          </div>
+        </details>
         <select data-action="filter-sort">
           <option value="updated_desc" ${state.filters.sort === "updated_desc" ? "selected" : ""}>Recently updated</option>
           <option value="newest" ${state.filters.sort === "newest" ? "selected" : ""}>Newest</option>
@@ -1050,8 +1140,13 @@ function renderAccountCard(account, query) {
         </div>
       </div>
       <div class="account-preview">
-        ${priorityLine ? `<div class="meta-line truncate">${priorityLine}</div>` : ""}
-        <div class="meta-line">Updated ${escapeHtml(formatRelative(account.updatedAt))}</div>
+        <div class="card-preview-row">
+          <div class="card-preview-copy">
+            ${priorityLine ? `<div class="meta-line truncate">${priorityLine}</div>` : ""}
+            <div class="meta-line">Updated ${escapeHtml(formatRelative(account.updatedAt))}</div>
+          </div>
+          ${renderCardLinkedIndicator(owner, account)}
+        </div>
       </div>
     </article>
   `;
@@ -1760,6 +1855,16 @@ function bindGlobalEvents() {
         }
         break;
       }
+      case "filter-platform":
+        state.filters.platform = value || "all";
+        target.closest("details[data-filter-menu]")?.removeAttribute("open");
+        render();
+        break;
+      case "filter-status":
+        state.filters.status = value || "all";
+        target.closest("details[data-filter-menu]")?.removeAttribute("open");
+        render();
+        break;
       case "platform-option": {
         const form = target.closest("form");
         const category = normalizePlatformCategory(form?.querySelector('[name="platformCategory"]')?.value || "social");
