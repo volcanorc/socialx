@@ -755,6 +755,7 @@ a {
   display: grid;
   gap: 8px;
   min-height: 100%;
+  overflow: hidden;
   transition:
     transform 0.18s ease,
     border-color 0.18s ease,
@@ -776,11 +777,16 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .account-title {
   display: grid;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .account-title strong {
@@ -793,10 +799,36 @@ a {
   font-size: 0.88rem;
 }
 
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
 .badge-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.card-status-slot {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .badge {
@@ -808,6 +840,7 @@ a {
   font-size: 0.8rem;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(148, 163, 184, 0.06);
+  white-space: nowrap;
 }
 
 .badge.platform {
@@ -824,6 +857,50 @@ a {
 .badge.warn {
   border-color: rgba(255, 180, 92, 0.22);
   background: rgba(255, 180, 92, 0.12);
+}
+
+.badge.dark {
+  border-color: rgba(71, 85, 105, 0.2);
+  background: rgba(71, 85, 105, 0.12);
+}
+
+.badge.pending {
+  border-color: rgba(255, 162, 78, 0.24);
+  background: rgba(255, 162, 78, 0.12);
+}
+
+.badge-status {
+  font-weight: 700;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  margin-top: 6px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.status-good {
+  background: #34d399;
+}
+
+.status-warn {
+  background: #fbbf24;
+}
+
+.status-danger {
+  background: #ef4444;
+}
+
+.status-dark {
+  background: #94a3b8;
+}
+
+.status-pending {
+  background: #fb923c;
 }
 
 .badge.danger {
@@ -886,6 +963,8 @@ a {
 .account-preview {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .account-preview mark,
@@ -926,6 +1005,8 @@ a {
 .drawer-title-row {
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .drawer-platform-icon {
@@ -945,12 +1026,23 @@ a {
   font-size: 1.08rem;
 }
 
+.drawer-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow: hidden;
+}
+
 .drawer-section {
   border-radius: 12px;
   padding: 10px;
   background: rgba(15, 23, 42, 0.02);
   border: 1px solid rgba(15, 23, 42, 0.06);
   min-width: 0;
+  overflow: hidden;
 }
 
 .drawer-summary-grid {
@@ -977,14 +1069,15 @@ a {
 }
 
 .linked-chip-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .linked-chip {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 0.48rem 0.68rem;
@@ -999,7 +1092,8 @@ a {
     transform 0.18s ease,
     border-color 0.18s ease,
     background 0.18s ease;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -1097,6 +1191,8 @@ a {
 .kv {
   display: grid;
   gap: 3px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .kv .key {
@@ -1108,6 +1204,8 @@ a {
 
 .kv .val {
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .relationship-tree {
@@ -1293,7 +1391,7 @@ a {
 
 .platform-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 8px;
 }
 
@@ -1311,6 +1409,7 @@ a {
   color: var(--text);
   text-align: center;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
   transition:
     transform 0.18s ease,
     border-color 0.18s ease,
@@ -1345,7 +1444,21 @@ a {
   flex-wrap: wrap;
 }
 
+.link-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.link-mode-toggle .category-pill {
+  width: 100%;
+  justify-content: center;
+}
+
 .category-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 10px;
   padding: 0.44rem 0.78rem;
   border: 1px solid rgba(15, 23, 42, 0.08);

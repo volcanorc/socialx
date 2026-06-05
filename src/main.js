@@ -100,6 +100,93 @@ function renderPlatformTile(platform, selected, hidden = false) {
   `;
 }
 
+function renderLinkModeToggle(mode = "separate") {
+  const linkedActive = mode === "linkedGoogle";
+  const separateActive = !linkedActive;
+  return `
+    <input type="hidden" name="linkMode" value="${escapeHtml(linkedActive ? "linkedGoogle" : "separate")}" data-link-mode-value />
+    <div class="category-toggle link-mode-toggle" data-link-mode-toggle>
+      <button type="button" class="category-pill ${linkedActive ? "is-active" : ""}" data-action="set-link-mode" data-link-mode-button data-value="linkedGoogle">
+        &#x1F7E2; Linked to existing Google
+      </button>
+      <button type="button" class="category-pill ${separateActive ? "is-active" : ""}" data-action="set-link-mode" data-link-mode-button data-value="separate">
+        &#x1F7E1; Separate account
+      </button>
+    </div>
+  `;
+}
+
+function renderStatusBadge(status = "active") {
+  const normalized = normalizeText(status);
+  const tone = normalized === "active"
+    ? "good"
+    : normalized === "paused"
+      ? "warn"
+      : normalized === "locked"
+        ? "danger"
+        : normalized === "archived"
+          ? "dark"
+          : normalized === "pending" || normalized === "closed"
+            ? "pending"
+            : "";
+  const icon =
+    normalized === "active"
+      ? "ðŸŸ¢"
+      : normalized === "paused"
+        ? "ðŸŸ¡"
+        : normalized === "locked"
+          ? "ðŸ”´"
+          : normalized === "archived"
+            ? "âš«"
+            : "ðŸŸ ";
+  const label =
+    normalized === "active"
+      ? "Active"
+      : normalized === "paused"
+        ? "Pause"
+        : normalized === "locked"
+          ? "Locked"
+          : normalized === "archived"
+            ? "Archive"
+            : "Pending Close";
+  return `<span class="badge ${tone} badge-status">${icon} ${escapeHtml(label)}</span>`;
+}
+
+function renderStatusDot(status = "active") {
+  const normalized = normalizeText(status);
+  const tone =
+    normalized === "active"
+      ? "good"
+      : normalized === "paused"
+        ? "warn"
+        : normalized === "locked"
+          ? "danger"
+          : normalized === "archived"
+            ? "dark"
+            : "pending";
+  const label =
+    normalized === "active"
+      ? "Active"
+      : normalized === "paused"
+        ? "Pause"
+        : normalized === "locked"
+          ? "Locked"
+          : normalized === "archived"
+            ? "Archive"
+            : "Pending Close";
+  return `<span class="status-dot status-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+}
+
+function cleanAnchorLabel(entry = {}) {
+  const raw = (entry.mainEmail || entry.label || entry.platform || "Google").toString().trim();
+  if (!raw) return "Google";
+  const dashIndex = raw.indexOf(" - ");
+  if (dashIndex > 0) {
+    return raw.slice(0, dashIndex).trim();
+  }
+  return raw;
+}
+
 function renderPlatformGrid(owner, category, selectedPlatform, linkMode) {
   const options = buildPlatformOptions(owner, category, { linkedGoogleMode: linkMode === "linkedGoogle" });
   const fallbackPlatform = getPlatformFallback(owner, category, linkMode === "linkedGoogle");
@@ -405,9 +492,8 @@ function renderLinkedAccountSection(owner, account, options = {}) {
   const chips = linkedAccounts
     .slice(0, limit)
     .map((linkedAccount) => {
-      const isGoogleAnchorView = normalizeText(account.platform).includes("google");
       return renderLinkedAccountChip(owner, linkedAccount, {
-        primary: isGoogleAnchorView ? (linkedAccount.label || linkedAccount.platform) : accountDisplayName(linkedAccount),
+        primary: linkedAccount.platform,
         secondary: ""
       });
     })
@@ -429,16 +515,31 @@ function syncAccountFormLinkState(form) {
   if (!(form instanceof HTMLFormElement)) return;
   const linkMode = form.querySelector('[name="linkMode"]');
   const platform = form.querySelector('[name="platform"]');
-  const mainEmail = form.querySelector('[name="mainEmail"]');
+  const mainEmailField = form.querySelector('[data-main-email-field]');
+  const mainEmail = mainEmailField?.querySelector('[name="mainEmail"]');
   const anchorGroup = form.querySelector('[data-linked-google-field]');
   const anchorSelect = form.querySelector('[name="anchorAccountId"]');
   const owner = currentOwnerState();
 
-  if (!linkMode || !platform || !mainEmail || !anchorGroup || !anchorSelect || !owner) return;
+  if (!linkMode || !platform || !mainEmailField || !mainEmail || !anchorGroup || !anchorSelect || !owner) return;
 
   const mode = linkMode.value === "linkedGoogle" ? "linkedGoogle" : "separate";
   anchorGroup.classList.toggle("is-hidden", mode !== "linkedGoogle");
-  mainEmail.disabled = mode === "linkedGoogle";
+  mainEmailField.classList.toggle("is-hidden", mode === "linkedGoogle");
+  if (mode === "linkedGoogle") {
+    if (!mainEmail.dataset.linkModeBackup) {
+      mainEmail.dataset.linkModeBackup = mainEmail.value || "";
+    }
+    mainEmail.disabled = true;
+  } else {
+    mainEmail.disabled = false;
+    if (mainEmail.dataset.linkModeBackup) {
+      if (!mainEmail.value || mainEmail.value === owner.accounts.find((account) => account.id === anchorSelect.value)?.mainEmail) {
+        mainEmail.value = mainEmail.dataset.linkModeBackup;
+      }
+      delete mainEmail.dataset.linkModeBackup;
+    }
+  }
 
   if (mode === "linkedGoogle") {
     const linkedAccount = owner.accounts.find((account) => account.id === anchorSelect.value);
@@ -460,6 +561,7 @@ function syncAccountFormPlatformState(form, preferredValue = "") {
 
   const activeCategory = normalizePlatformCategory(categoryInput.value || "social");
   const linkMode = form.querySelector('[name="linkMode"]')?.value === "linkedGoogle";
+  const currentPlatformValue = platformInput.value || "";
   const rememberedValue = state.platformSelections[activeCategory] ?? getDefaultPlatformSelection(activeCategory);
 
   categoryInput.value = activeCategory;
@@ -472,13 +574,14 @@ function syncAccountFormPlatformState(form, preferredValue = "") {
 
   const options = buildPlatformOptions(owner, activeCategory, { linkedGoogleMode: linkMode });
   const fallbackPlatform = getPlatformFallback(owner, activeCategory, linkMode);
-  const candidateValue = preferredValue || rememberedValue;
+  const candidateValue = preferredValue || currentPlatformValue || rememberedValue;
   const displayValue = linkMode && normalizeText(candidateValue) === normalizeText("Google") ? fallbackPlatform : candidateValue;
   const nextValue = options.some((option) => normalizeText(option) === normalizeText(displayValue))
     ? displayValue
     : fallbackPlatform;
 
   platformInput.value = nextValue;
+  state.platformSelections[activeCategory] = nextValue;
 
   const customVisible = normalizeText(nextValue) === normalizeText("Custom");
   const buttons = options
@@ -927,43 +1030,27 @@ function renderFilters(owner) {
 
 function renderAccountCard(account, query) {
   const owner = currentOwnerState();
-  const customFields = owner?.customFieldValues
-    ?.filter((value) => value.accountId === account.id)
-    .map((value) => ({
-      field: owner.customFields.find((field) => field.id === value.fieldId),
-      value
-    }))
-    .filter((entry) => entry.field) ?? [];
   const linkedGoogle = account.platform === "Google" ? null : getGoogleAnchorAccount(owner, account);
-  const emailLine = account.mainEmail && !linkedGoogle ? `<span>${highlightMatch(account.mainEmail, query)}</span>` : "";
-  const usernameLine = account.username ? `<div class="meta-line">${highlightMatch(account.username, query)}</div>` : "";
-  const notesLine = account.notes ? `<div class="meta-line">${highlightMatch(account.notes.slice(0, 110), query)}</div>` : "";
+  const priorityLine = linkedGoogle?.mainEmail
+    ? highlightMatch(linkedGoogle.mainEmail, query)
+    : account.mainEmail
+      ? highlightMatch(account.mainEmail, query)
+      : account.username
+        ? highlightMatch(account.username, query)
+        : "";
 
   return `
     <article class="account-card ${state.selectedAccountId === account.id ? "is-selected" : ""}" data-action="select-account" data-id="${escapeHtml(account.id)}">
       <div class="account-card-header">
         <div class="account-title">
-          <strong>${highlightMatch(account.label, query)}</strong>
-          ${emailLine}
-        </div>
-        <div class="badge-row">
           ${renderPlatformBadge(account.platform)}
-          <span class="badge ${account.status === "active" ? "good" : account.status === "archived" ? "warn" : account.status === "locked" ? "danger" : ""}">${escapeHtml(account.status)}</span>
+        </div>
+        <div class="card-status-slot">
+          ${renderStatusDot(account.status)}
         </div>
       </div>
       <div class="account-preview">
-        ${usernameLine}
-        ${notesLine}
-        ${renderLinkedAccountSection(owner, account, { limit: 3 })}
-        <div class="badge-row">
-          ${customFields
-            .slice(0, 3)
-            .map((entry) => {
-              const valueText = entry.value.valueText || (entry.value.encryptedValue ? "Encrypted" : "—");
-              return `<span class="badge">${escapeHtml(entry.field.name)}: ${escapeHtml(valueText)}</span>`;
-            })
-            .join("")}
-        </div>
+        ${priorityLine ? `<div class="meta-line truncate">${priorityLine}</div>` : ""}
         <div class="meta-line">Updated ${escapeHtml(formatRelative(account.updatedAt))}</div>
       </div>
     </article>
@@ -1002,11 +1089,11 @@ function renderAccountDetails(owner) {
   const revealed = state.revealedSecrets[enriched.id] ?? false;
   const secretPreview = revealed ? (state.secretCache[enriched.id] || "••••••••") : (enriched.secretRecord ? "••••••••" : "None");
   const detailRows = [
-    enriched.mainEmail ? `<div class="kv"><div class="key">Main email</div><div class="val">${escapeHtml(enriched.mainEmail)}</div></div>` : "",
-    enriched.username ? `<div class="kv"><div class="key">Username</div><div class="val">${escapeHtml(enriched.username)}</div></div>` : "",
+    enriched.mainEmail ? `<div class="kv"><div class="key">Main email</div><div class="val truncate">${escapeHtml(enriched.mainEmail)}</div></div>` : "",
+    enriched.username ? `<div class="kv"><div class="key">Username</div><div class="val truncate">${escapeHtml(enriched.username)}</div></div>` : "",
     enriched.secretRecord
       ? `<div class="kv kv-secret">
-          <div class="key">Password / secret</div>
+          <div class="key">Password</div>
           <div class="val secret-row">
             <span class="secret-value ${revealed ? "is-revealed" : "is-masked"}">${escapeHtml(secretPreview)}</span>
             <div class="secret-actions">
@@ -1031,10 +1118,10 @@ function renderAccountDetails(owner) {
         <div class="topbar-left compact drawer-title-row">
           <div class="drawer-platform-icon">${renderPlatformIcon(enriched.platform)}</div>
           <div>
-            <h2>${escapeHtml(enriched.label)}</h2>
-            <div class="meta-line">${escapeHtml(enriched.platform)} - ${escapeHtml(enriched.status)}</div>
+            <h2 class="truncate">${escapeHtml(enriched.platform)}</h2>
           </div>
         </div>
+        ${renderStatusDot(enriched.status)}
       </div>
       <div class="drawer-section drawer-summary-grid">${detailRows}</div>
       ${enriched.notes ? `<div class="drawer-section drawer-notes"><div class="key">Notes</div><div class="val">${escapeHtml(enriched.notes)}</div></div>` : ""}
@@ -1120,10 +1207,7 @@ function renderAccountForm(mode, account, owner) {
       <div class="form-grid">
         <div class="form-field full">
           <label>Link mode</label>
-          <select name="linkMode" data-action="link-mode">
-            <option value="linkedGoogle" ${linkMode === "linkedGoogle" ? "selected" : ""}>&#x1F7E2; Linked to existing Google</option>
-            <option value="separate" ${linkMode === "separate" ? "selected" : ""}>&#x1F7E1; Separate account</option>
-          </select>
+          ${renderLinkModeToggle(linkMode)}
         </div>
 
         <div class="form-field full ${linkMode === "linkedGoogle" ? "" : "is-hidden"}" data-linked-google-field>
@@ -1134,16 +1218,14 @@ function renderAccountForm(mode, account, owner) {
               .filter((entry) => entry.platform === "Google" && (!account || entry.id !== account.id))
               .map(
                 (entry) => `
-                  <option value="${escapeHtml(entry.id)}" ${entry.id === anchorAccountId ? "selected" : ""}>
-                    ${escapeHtml(entry.label)}${entry.mainEmail ? ` - ${escapeHtml(entry.mainEmail)}` : ""}
-                  </option>
+                  <option value="${escapeHtml(entry.id)}" ${entry.id === anchorAccountId ? "selected" : ""}>${escapeHtml(cleanAnchorLabel(entry))}</option>
                 `
               )
               .join("")}
           </select>
         </div>
 
-        <div class="form-field">
+        <div class="form-field full ${linkMode === "linkedGoogle" ? "is-hidden" : ""}" data-main-email-field>
           <label>Main email or Google email</label>
           <input name="mainEmail" placeholder="name@example.com" value="${escapeHtml(account?.mainEmail ?? "")}" ${linkMode === "linkedGoogle" ? "disabled" : ""} />
         </div>
@@ -1179,7 +1261,7 @@ function renderAccountForm(mode, account, owner) {
           <input name="username" placeholder="@handle / account username" value="${escapeHtml(account?.username ?? "")}" />
         </div>
         <div class="form-field">
-          <label>Password or secret label</label>
+          <label>Password</label>
           <input
             name="secretValue"
             type="text"
@@ -1188,9 +1270,8 @@ function renderAccountForm(mode, account, owner) {
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"
-            placeholder="Stored encrypted if provided"
+            placeholder="Password"
           />
-          <div class="field-hint">Stored as an encrypted secret instead of a browser credential.</div>
         </div>
         <div class="form-field">
           <label>Status</label>
@@ -1294,7 +1375,7 @@ function renderModal() {
             <h2 id="accountModalTitle">${escapeHtml(title)}</h2>
             <div class="meta-line">A simple account form with Google linking and custom fields.</div>
           </div>
-          <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
+          <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
         </div>
         ${renderAccountForm(mode, account, owner)}
       </div>
@@ -1362,7 +1443,7 @@ function renderImportModal() {
             <h2>Import vault snapshot</h2>
             <div class="meta-line">Upload a SocialX JSON export to restore accounts, fields, relationships, and logs.</div>
           </div>
-          <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
+          <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
         </div>
         <form id="importForm">
           <div class="form-field full">
@@ -1390,7 +1471,7 @@ function renderExportModal(snapshot) {
             <h2>Export vault snapshot</h2>
             <div class="meta-line">Copy or download the current owner vault as JSON.</div>
           </div>
-          <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
+          <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
         </div>
         <div class="custom-field-box">
           <pre style="white-space: pre-wrap; margin: 0; max-height: 52vh; overflow: auto;">${escapeHtml(JSON.stringify(snapshot, null, 2))}</pre>
@@ -1503,7 +1584,7 @@ function render() {
                 <h2>Settings</h2>
                 <div class="meta-line">Vault passphrase, archive behavior, and export/import safety controls.</div>
               </div>
-              <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
+              <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
             </div>
             <div class="form-grid">
               <div class="form-field full">
@@ -1660,6 +1741,16 @@ function bindGlobalEvents() {
       case "select-account":
         setSelected(id);
         break;
+      case "set-link-mode": {
+        const form = target.closest("form");
+        const linkModeInput = form?.querySelector('[name="linkMode"]');
+        if (linkModeInput) {
+          linkModeInput.value = value === "linkedGoogle" ? "linkedGoogle" : "separate";
+          syncAccountFormLinkState(form);
+          syncAccountFormPlatformState(form);
+        }
+        break;
+      }
       case "set-platform-category": {
         const form = target.closest("form");
         const categoryInput = form?.querySelector('[name="platformCategory"]');
@@ -1784,7 +1875,7 @@ function bindGlobalEvents() {
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platformCategory"]')) {
+    if (target.matches('[name="anchorAccountId"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
       syncAccountFormPlatformState(form);
@@ -1806,7 +1897,7 @@ function bindGlobalEvents() {
       savePassphrase(target.value);
       return;
     }
-    if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platformCategory"]')) {
+    if (target.matches('[name="anchorAccountId"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
       syncAccountFormPlatformState(form);
@@ -1842,3 +1933,5 @@ async function initialize() {
 }
 
 initialize();
+
+
