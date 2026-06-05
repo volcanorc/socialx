@@ -1691,8 +1691,6 @@ function renderDashboard() {
                     </div>
                   </div>
                   <div class="inline-actions">
-                    <button class="secondary-button" type="button" data-action="open-import">Import</button>
-                    <button class="secondary-button" type="button" data-action="open-export">Export</button>
                     <button class="primary-button" type="button" data-action="open-create">Add account</button>
                   </div>
                 </div>
