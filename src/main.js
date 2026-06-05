@@ -42,6 +42,11 @@ const state = {
   modal: null,
   toast: null,
   duplicateWarnings: [],
+  platformSelections: {
+    social: "Google",
+    bank: "PayPal",
+    government: "BIR"
+  },
   passphrase: sessionStorage.getItem("socialx:vault-passphrase") ?? ""
 };
 
@@ -56,6 +61,13 @@ function getInitials(text = "") {
 
 function getProfileImageUrl(user) {
   return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
+}
+
+function getDefaultPlatformSelection(category = "social") {
+  const normalized = normalizePlatformCategory(category);
+  if (normalized === "bank") return "PayPal";
+  if (normalized === "government") return "BIR";
+  return "Google";
 }
 
 function renderProfileCircle(user, fallbackText = "U", className = "avatar") {
@@ -367,9 +379,7 @@ function syncAccountFormPlatformState(form) {
 
   const activeCategory = normalizePlatformCategory(categoryInput.value || "social");
   const linkMode = form.querySelector('[name="linkMode"]')?.value === "linkedGoogle";
-  const previousValue = platformSelect.value;
-  const selectionKey = `platformSelection${activeCategory[0].toUpperCase()}${activeCategory.slice(1)}`;
-  const storedValue = form.dataset[selectionKey] ?? "";
+  const rememberedValue = state.platformSelections[activeCategory] ?? getDefaultPlatformSelection(activeCategory);
 
   categoryInput.value = activeCategory;
   label.textContent = `${PLATFORM_CATEGORY_LABELS[activeCategory]} platform`;
@@ -380,13 +390,11 @@ function syncAccountFormPlatformState(form) {
   }
 
   const options = buildPlatformOptions(owner, activeCategory, { linkedGoogleMode: linkMode });
-  const rememberedValue = storedValue || previousValue || options[0] || "";
-  const filteredValue = linkMode && normalizeText(rememberedValue) === normalizeText("Google")
-    ? (options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? "")
-    : rememberedValue;
-  const nextValue = options.some((option) => normalizeText(option) === normalizeText(filteredValue))
-    ? filteredValue
-    : (options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? "");
+  const fallbackPlatform = options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? getDefaultPlatformSelection(activeCategory);
+  const displayValue = linkMode && normalizeText(rememberedValue) === normalizeText("Google") ? fallbackPlatform : rememberedValue;
+  const nextValue = options.some((option) => normalizeText(option) === normalizeText(displayValue))
+    ? displayValue
+    : fallbackPlatform;
 
   platformSelect.innerHTML = options
     .map((platform) => {
@@ -398,7 +406,6 @@ function syncAccountFormPlatformState(form) {
 
   platformSelect.disabled = false;
   platformSelect.value = nextValue;
-  form.dataset[selectionKey] = nextValue;
 
   const customName = form.querySelector('[name="customPlatformName"]');
   const customVisible = normalizeText(nextValue) === normalizeText("Custom");
@@ -984,13 +991,10 @@ function renderAccountForm(mode, account, owner) {
   const accountPlatform = account?.platform ?? "";
   const activePlatformOptions = buildPlatformOptions(owner, platformCategory, { linkedGoogleMode: linkMode === "linkedGoogle" });
   const knownPlatform = activePlatformOptions.some((option) => normalizeText(option) === normalizeText(accountPlatform));
-  const selectedPlatform = !accountPlatform
-    ? (linkMode === "linkedGoogle"
-        ? activePlatformOptions.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? activePlatformOptions[0] ?? "Facebook"
-        : activePlatformOptions[0] ?? "Google")
-    : knownPlatform
-      ? accountPlatform
-      : "Custom";
+  const rememberedSelection = state.platformSelections[platformCategory] ?? getDefaultPlatformSelection(platformCategory);
+  const selectedPlatform = accountPlatform
+    ? (knownPlatform ? accountPlatform : "Custom")
+    : rememberedSelection;
   const customPlatformName = knownPlatform || !accountPlatform ? "" : accountPlatform;
   const customRows = mode === "edit" && account?.customFields.length ? account.customFields : [];
 
@@ -1511,7 +1515,7 @@ function bindGlobalEvents() {
         if (categoryInput) {
           const previousCategory = normalizePlatformCategory(categoryInput.value || "social");
           if (platformSelect) {
-            form.dataset[`platformSelection${previousCategory[0].toUpperCase()}${previousCategory.slice(1)}`] = platformSelect.value;
+            state.platformSelections[previousCategory] = state.platformSelections[previousCategory] ?? platformSelect.value ?? getDefaultPlatformSelection(previousCategory);
           }
           categoryInput.value = value || "social";
           syncAccountFormPlatformState(form);
@@ -1522,7 +1526,7 @@ function bindGlobalEvents() {
         const form = target.closest("form");
         const category = normalizePlatformCategory(form?.querySelector('[name="platformCategory"]')?.value || "social");
         if (form && target instanceof HTMLSelectElement) {
-          form.dataset[`platformSelection${category[0].toUpperCase()}${category.slice(1)}`] = target.value;
+          state.platformSelections[category] = target.value;
         }
         syncAccountFormPlatformState(form);
         break;
