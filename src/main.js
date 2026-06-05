@@ -367,7 +367,7 @@ function syncAccountFormLinkState(form) {
   }
 }
 
-function syncAccountFormPlatformState(form) {
+function syncAccountFormPlatformState(form, preferredValue = "") {
   if (!(form instanceof HTMLFormElement)) return;
   const categoryInput = form.querySelector('[name="platformCategory"]');
   const platformSelect = form.querySelector('select[name="platform"]');
@@ -391,7 +391,8 @@ function syncAccountFormPlatformState(form) {
 
   const options = buildPlatformOptions(owner, activeCategory, { linkedGoogleMode: linkMode });
   const fallbackPlatform = options.find((option) => normalizeText(option) !== normalizeText("Google") && normalizeText(option) !== normalizeText("Custom")) ?? options[0] ?? getDefaultPlatformSelection(activeCategory);
-  const displayValue = linkMode && normalizeText(rememberedValue) === normalizeText("Google") ? fallbackPlatform : rememberedValue;
+  const candidateValue = preferredValue || rememberedValue;
+  const displayValue = linkMode && normalizeText(candidateValue) === normalizeText("Google") ? fallbackPlatform : candidateValue;
   const nextValue = options.some((option) => normalizeText(option) === normalizeText(displayValue))
     ? displayValue
     : fallbackPlatform;
@@ -1522,7 +1523,7 @@ function bindGlobalEvents() {
             state.platformSelections[previousCategory] = platformSelect.value || getDefaultPlatformSelection(previousCategory);
           }
           categoryInput.value = value || "social";
-          syncAccountFormPlatformState(form);
+          syncAccountFormPlatformState(form, platformSelect?.value || "");
         }
         break;
       }
@@ -1532,7 +1533,7 @@ function bindGlobalEvents() {
         if (form && target instanceof HTMLSelectElement) {
           state.platformSelections[category] = target.value;
         }
-        syncAccountFormPlatformState(form);
+        syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
         break;
       }
       case "add-custom-field-row": {
@@ -1639,7 +1640,7 @@ function bindGlobalEvents() {
     if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
-      syncAccountFormPlatformState(form);
+      syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
       return;
     }
     if (target.matches('input[type="file"][data-import-file]')) {
@@ -1661,7 +1662,7 @@ function bindGlobalEvents() {
     if (target.matches('[name="linkMode"], [name="anchorAccountId"], [name="platform"], [name="platformCategory"]')) {
       const form = target.closest("form");
       syncAccountFormLinkState(form);
-      syncAccountFormPlatformState(form);
+      syncAccountFormPlatformState(form, target instanceof HTMLSelectElement ? target.value : "");
       return;
     }
     if (target.matches('select[name="showArchived"]')) {
