@@ -128,18 +128,63 @@ function platformTone(platform = "") {
   return "custom";
 }
 
+const PLATFORM_ICON_ASSETS = {
+  google: "../assets/platform-icons/social/google.png",
+  facebook: "../assets/platform-icons/social/facebook.png",
+  instagram: "../assets/platform-icons/social/instagram.png",
+  tiktok: "../assets/platform-icons/social/tiktok.png",
+  "x / twitter": "../assets/platform-icons/social/twitter.png",
+  twitter: "../assets/platform-icons/social/twitter.png",
+  x: "../assets/platform-icons/social/twitter.png",
+  discord: "../assets/platform-icons/social/discord.png",
+  steam: "../assets/platform-icons/social/steam.png",
+  "riot / valorant": "../assets/platform-icons/social/valorant.png",
+  riot: "../assets/platform-icons/social/valorant.png",
+  valorant: "../assets/platform-icons/social/valorant.png",
+  paypal: "../assets/platform-icons/bank/paypal.png",
+  "coins.ph": "../assets/platform-icons/bank/coins-ph.png",
+  gcash: "../assets/platform-icons/bank/gcash.png",
+  maya: "../assets/platform-icons/bank/maya-bank.png",
+  bdo: "../assets/platform-icons/bank/bdo.png",
+  gotyme: "../assets/platform-icons/bank/gotyme.png",
+  atome: "../assets/platform-icons/bank/atome.png",
+  "tin id": "../assets/platform-icons/government/bir.png",
+  tin: "../assets/platform-icons/government/bir.png",
+  pagibig: "../assets/platform-icons/government/pag-ibig.png",
+  "pag-ibig": "../assets/platform-icons/government/pag-ibig.png",
+  nbi: "../assets/platform-icons/government/nbi.png",
+  philsys: "../assets/platform-icons/government/philsys.png",
+  egovph: "../assets/platform-icons/government/egovph.png",
+  pnp: "../assets/platform-icons/government/pnp.png"
+};
+
+function getPlatformIconAsset(platform = "") {
+  const normalized = normalizeText(platform);
+  return PLATFORM_ICON_ASSETS[normalized] ?? null;
+}
+
 function renderPlatformIcon(platform = "") {
-  if (normalizeText(platform).includes("google")) {
+  const iconAsset = getPlatformIconAsset(platform);
+  const tone = escapeHtml(platformTone(platform));
+  if (iconAsset) {
+    const src = new URL(iconAsset, import.meta.url).href;
     return `
-      <span class="platform-icon platform-google" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="14" height="14" role="img" focusable="false">
-          <path fill="#4285F4" d="M21.35 11.1H12v2.97h5.34c-.23 1.38-1.42 4.03-5.34 4.03A5.95 5.95 0 0 1 6 12a5.95 5.95 0 0 1 6-6c1.7 0 2.84.72 3.49 1.34l2.38-2.29C16.42 3.63 14.4 2.75 12 2.75 6.9 2.75 2.75 6.9 2.75 12S6.9 21.25 12 21.25c5.32 0 8.84-3.74 8.84-9 0-.6-.06-1.05-.16-1.15z"/>
-        </svg>
+      <span class="platform-icon platform-image" aria-hidden="true">
+        <img class="platform-icon-image" src="${escapeHtml(src)}" alt="" />
       </span>
     `;
   }
 
-  return `<span class="platform-icon platform-${escapeHtml(platformTone(platform))}" aria-hidden="true">${escapeHtml(platformInitial(platform))}</span>`;
+  return `<span class="platform-icon platform-fallback platform-${tone}" aria-hidden="true">${escapeHtml(platformInitial(platform))}</span>`;
+}
+
+function renderPlatformBadge(platform = "") {
+  return `
+    <span class="badge platform">
+      ${renderPlatformIcon(platform)}
+      <span>${escapeHtml(platform)}</span>
+    </span>
+  `;
 }
 
 function accountDisplayName(account) {
@@ -778,7 +823,7 @@ function renderAccountCard(account, query) {
           ${emailLine}
         </div>
         <div class="badge-row">
-          <span class="badge platform">${escapeHtml(account.platform)}</span>
+          ${renderPlatformBadge(account.platform)}
           <span class="badge ${account.status === "active" ? "good" : account.status === "archived" ? "warn" : account.status === "locked" ? "danger" : ""}">${escapeHtml(account.status)}</span>
         </div>
       </div>
