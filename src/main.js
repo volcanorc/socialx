@@ -545,9 +545,16 @@ function renderCardLinkedIndicator(owner, account) {
         <div class="avatar-stack" aria-hidden="true">
           ${visible
             .map((entry) => `
-              <span class="stack-avatar" title="${escapeHtml(entry.platform)}" aria-label="${escapeHtml(entry.platform)}">
+              <button
+                type="button"
+                class="stack-avatar stack-avatar-button"
+                data-action="select-account"
+                data-id="${escapeHtml(entry.id)}"
+                title="${escapeHtml(entry.platform)}"
+                aria-label="${escapeHtml(entry.platform)}"
+              >
                 ${renderPlatformIcon(entry.platform)}
-              </span>
+              </button>
             `)
             .join("")}
           ${extraCount > 0 ? `<span class="stack-more">+${extraCount}</span>` : ""}
@@ -559,10 +566,17 @@ function renderCardLinkedIndicator(owner, account) {
   const anchor = getGoogleAnchorAccount(owner, account);
   if (!anchor) return "";
   return `
-    <div class="card-linked-slot card-linked-single" title="Linked to Google" aria-label="Linked to Google">
+    <button
+      type="button"
+      class="card-linked-slot card-linked-single"
+      data-action="select-account"
+      data-id="${escapeHtml(anchor.id)}"
+      title="Linked to Google"
+      aria-label="Linked to Google"
+    >
       ${renderPlatformIcon("Google")}
       <span>Linked to Google</span>
-    </div>
+    </button>
   `;
 }
 
@@ -1121,7 +1135,7 @@ function renderFilters(owner) {
 function renderAccountCard(account, query) {
   const owner = currentOwnerState();
   const linkedGoogle = account.platform === "Google" ? null : getGoogleAnchorAccount(owner, account);
-  const priorityLine = linkedGoogle?.mainEmail
+  const identityLine = linkedGoogle?.mainEmail
     ? highlightMatch(linkedGoogle.mainEmail, query)
     : account.mainEmail
       ? highlightMatch(account.mainEmail, query)
@@ -1140,13 +1154,9 @@ function renderAccountCard(account, query) {
         </div>
       </div>
       <div class="account-preview">
-        <div class="card-preview-row">
-          <div class="card-preview-copy">
-            ${priorityLine ? `<div class="meta-line truncate">${priorityLine}</div>` : ""}
-            <div class="meta-line">Updated ${escapeHtml(formatRelative(account.updatedAt))}</div>
-          </div>
-          ${renderCardLinkedIndicator(owner, account)}
-        </div>
+        ${identityLine ? `<div class="card-identity-line">${identityLine}</div>` : ""}
+        <div class="card-updated-line">Updated ${escapeHtml(formatRelative(account.updatedAt))}</div>
+        ${renderCardLinkedIndicator(owner, account)}
       </div>
     </article>
   `;

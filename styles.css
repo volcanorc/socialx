@@ -1075,21 +1075,6 @@ a {
   overflow: hidden;
 }
 
-.card-preview-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: end;
-  min-width: 0;
-}
-
-.card-preview-copy {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-
 .card-linked-slot {
   justify-self: end;
   align-self: end;
@@ -1107,6 +1092,13 @@ a {
   background: rgba(255, 255, 255, 0.9);
   color: var(--muted);
   font-size: 0.74rem;
+}
+
+.card-linked-single,
+.stack-avatar-button {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
 .card-linked-single .platform-icon {
@@ -1143,6 +1135,11 @@ a {
   background: #fff;
   border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+  padding: 0;
+}
+
+.stack-avatar-button {
+  cursor: pointer;
 }
 
 .stack-avatar + .stack-avatar {
@@ -1168,6 +1165,23 @@ a {
   color: var(--text);
   font-size: 0.7rem;
   font-weight: 700;
+}
+
+.card-identity-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.card-updated-line {
+  min-width: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.2;
 }
 
 .account-preview mark,
