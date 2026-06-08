@@ -29,6 +29,7 @@ const state = {
   session: null,
   authUserId: null,
   ownerId: null,
+  neonError: null,
   identityDebug: null,
   search: "",
   filters: {
@@ -829,6 +830,7 @@ async function refreshSession() {
   const result = await state.auth.getSession();
   state.session = result.user ? result : null;
   state.authUserId = result.user?.id ?? result.session?.userId ?? result.session?.user?.id ?? null;
+  state.neonError = null;
   if (state.authUserId) {
     const identity = extractIdentityClaims(result);
     const profile = {
@@ -860,9 +862,7 @@ async function refreshSession() {
         googleSubject: resolved.googleSubject ?? profile.googleSubject,
         canonicalKey: resolved.canonicalKey ?? profile.canonicalKey
       };
-      await store.initialize(state.ownerId, profile, {
-        aliases: resolved.linkedAuthUserId && resolved.linkedAuthUserId !== state.ownerId ? [resolved.linkedAuthUserId] : [state.authUserId]
-      });
+      await store.initialize(state.ownerId, profile);
       if (!state.ownerId) return;
       const current = store.getOwner(state.ownerId);
       if (!current.profile.displayName) {
@@ -871,11 +871,27 @@ async function refreshSession() {
       store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
       render();
     } catch (error) {
+      state.neonError = error?.message ?? String(error);
+      state.identityDebug = {
+        authUserId: state.authUserId,
+        sessionUserId: identity.sessionUserId,
+        email: profile.email,
+        googleSubject: profile.googleSubject,
+        canonicalKey: profile.canonicalKey,
+        resolutionSource: "error",
+        resolutionError: state.neonError,
+        rawUserKeys: identity.rawUserKeys ?? [],
+        rawSessionUserKeys: identity.rawSessionUserKeys ?? [],
+        rawResponseKeys: identity.rawResponseKeys ?? []
+      };
+      state.ownerId = null;
+      state.selectedAccountId = null;
       console.warn("Failed to hydrate Neon store.", error);
     }
   } else {
     state.ownerId = null;
     state.identityDebug = null;
+    state.neonError = null;
     state.selectedAccountId = null;
   }
   syncRoute();
@@ -931,7 +947,7 @@ function renderSyncStatus(owner) {
   if (!configured) {
     return `
       <div class="note-box">
-        Neon Data API is not configured. SocialX is running from the local browser cache only.
+        Neon Data API is not configured. SocialX cannot hydrate this vault from Neon.
       </div>
     `;
   }
@@ -944,24 +960,49 @@ function renderSyncStatus(owner) {
     `;
   }
   const lastSyncLabel = sync.lastSyncAt ? formatRelative(sync.lastSyncAt) : "just now";
-  const sourceLabel =
-    sync.source === "merged"
-      ? "Loaded from Neon + local cache"
-      : sync.source === "localStorage"
-        ? "Loaded from localStorage cache"
-        : sync.source === "empty"
-          ? "No remote owner row found yet"
-          : "Loaded from Neon";
-  const titleLabel = sync.source === "localStorage" ? "Local cache active" : "Connected to Neon";
+  const sourceLabel = sync.source === "error" ? "Neon sync unavailable" : "Loaded from Neon";
+  const titleLabel = sync.source === "error" ? "Neon sync error" : "Connected to Neon";
   const tone =
-    sync.source === "localStorage"
-      ? "background: rgba(255, 244, 214, 0.85); border-color: rgba(201, 137, 35, 0.18); color: #7a5a12;"
+    sync.source === "error"
+      ? "background: rgba(255, 233, 238, 0.9); border-color: rgba(210, 60, 90, 0.18); color: #8f2741;"
       : "background: rgba(112, 225, 166, 0.08); border-color: rgba(112, 225, 166, 0.16); color: #d8ffe8;";
   return `
     <div class="note-box" style="${tone}">
       <strong>${escapeHtml(titleLabel)}</strong><br />
       ${escapeHtml(sourceLabel)}. Last sync ${escapeHtml(lastSyncLabel)}.
     </div>
+  `;
+}
+
+function renderNeonError() {
+  const debug = state.identityDebug;
+  return `
+    <main class="app-shell hero">
+      <section class="hero-card hero-card-simple">
+        <div class="sign-in-card sign-in-card-simple" style="max-width: 760px;">
+          <div class="brand">
+            <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
+            <div class="brand-title">
+              <strong>${escapeHtml(config.appName)}</strong>
+              <span>Neon connection required</span>
+            </div>
+          </div>
+          <h1>Neon is not loading this vault</h1>
+          <p>
+            SocialX now hydrates data directly from Neon only. The current session could not resolve or load the owner record.
+          </p>
+          <div class="note-box">
+            <strong>Connection error</strong><br />
+            ${escapeHtml(state.neonError || "Unknown Neon error")}
+          </div>
+          ${debug ? renderIdentityDebug(currentOwnerState()) : ""}
+          <div class="skeleton-button-row" style="justify-content: flex-start;">
+            <button class="primary-button" type="button" data-action="retry-neon">Retry Neon</button>
+            <button class="secondary-button" type="button" data-action="sign-out">Sign out</button>
+          </div>
+        </div>
+      </section>
+    </main>
   `;
 }
 
@@ -1115,7 +1156,7 @@ async function submitAccountForm(form, mode, accountId = null) {
   }
   const synced = await store.syncOwner(state.ownerId);
   if (!synced) {
-    setToast("Saved locally", "The account saved locally, but Neon sync needs attention.", "warn");
+    setToast("Neon sync failed", "The account changes were not persisted to Neon. Retry after the connection recovers.", "warn");
   }
   if (mode === "edit") {
     state.modal = { mode: "account-details", accountId: state.selectedAccountId, justUpdated: true };
@@ -1863,6 +1904,11 @@ function render() {
     return;
   }
 
+  if (state.neonError && state.session) {
+    app.innerHTML = renderNeonError();
+    return;
+  }
+
   if (!state.session || !state.ownerId) {
     app.innerHTML = renderSignIn();
     if (state.modal) {
@@ -1927,6 +1973,7 @@ function bindGlobalEvents() {
         state.session = null;
         state.authUserId = null;
         state.ownerId = null;
+        state.neonError = null;
         state.identityDebug = null;
         state.selectedAccountId = null;
         state.secretCache = {};
@@ -1947,6 +1994,11 @@ function bindGlobalEvents() {
         break;
       case "open-export":
         navigate("#export");
+        render();
+        break;
+      case "retry-neon":
+        state.neonError = null;
+        await refreshSession();
         render();
         break;
       case "close-modal":

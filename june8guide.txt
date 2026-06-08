@@ -1,0 +1,383 @@
+SocialX June 8 Handoff Guide
+
+Current repo state
+- Repo: C:\Users\Marketing\Documents\Codex\2026-06-04\plan-this-i-plan-to-create\repo2
+- Main branch commit at handoff: a0312c3c20dbb17dd411b60c29c552ae6c76f9a6
+- Untracked local-only file intentionally left out of commits: .gitconfig-local
+- Local preview server was reachable at http://127.0.0.1:3001 during verification.
+- Follow-up update after handoff: the app was changed again so localStorage is no longer treated as the active vault source. Neon hydration now fails visibly instead of falling back to cached browser data.
+
+Original problem
+The user reported that records created while logged in with the same Google account were not appearing across devices, even though local and production were both connected to the same Neon backend. The concern was that the app might be:
+- using different backend URLs in different environments,
+- assigning different auth user IDs for the same Google account,
+- saving data only to localStorage instead of Neon,
+- filtering reads by the wrong owner key,
+- or creating duplicate owner/user rows during auth bootstrap.
+
+The user explicitly asked for proof first, then a production-grade fix that guarantees one Google account maps to one shared user identity and shared data across devices.
+
+High-level conclusion
+The codebase confirmed a single Neon Auth URL and a single Neon Data API URL. The primary cause was not multiple database URLs. The main issue was that the app was treating the raw Neon auth user ID as the owner identity everywhere, while localStorage remained a usable fallback snapshot. There was no canonical identity resolver in the app or schema before this work.
+
+What was already true before this investigation
+1. Single backend wiring
+- The app used a single hardcoded Neon Auth URL and Neon Data API URL in:
+  - index.html
+  - src/config.js
+  - src/neon.js
+- server.mjs was only a static server and did not override backend URLs.
+
+2. Owner-keyed data model existed
+- Data tables were already keyed by owner_auth_user_id in src/store.js and sql/schema.sql.
+- The visible data model was owner-based, but the owner key was still just the auth user ID.
+
+3. localStorage fallback existed
+- src/store.js used localStorage key socialx:owners:v2 as a snapshot cache.
+- sessionStorage was only used for the vault passphrase.
+- The app could therefore appear to have complete data on one device even if Neon sync did not actually succeed.
+
+4. No provider-subject canonical identity code existed
+- Searches of src/main.js, src/store.js, src/auth.js, and sql/schema.sql found no code that extracted or persisted a Google provider subject / sub claim.
+- The app had no notion of a canonical Google identity separate from the Neon auth user ID.
+
+Evidence gathered
+Code-path evidence:
+- src/main.js set state.ownerId directly from result.user?.id / result.session?.userId / result.session?.user?.id.
+- src/main.js passed state.ownerId into store.initialize(), store.listAccounts(), store.createAccount(), store.updateAccount(), store.archiveAccount(), store.deleteAccount(), store.importOwner(), and store.syncOwner().
+- src/store.js loaded remote data by filtering Neon tables on auth_user_id / owner_auth_user_id equal to the raw owner ID.
+- src/store.js flushed remote data by deleting and reinserting rows for that raw owner ID.
+- sql/schema.sql enforced RLS and ownership based on auth.user_id() = auth_user_id or owner_auth_user_id before the canonical identity change.
+
+Runtime behavior evidence:
+- renderSyncStatus(owner) already surfaced whether Neon sync had errors.
+- The UI had no identity debug surface, so the exact auth/session/user-claim state was not visible before this investigation.
+
+Proved hypotheses
+1. Disproven: “There are multiple backend URLs in the source tree.”
+- The code consistently used the same Neon Auth and Data API URLs in the app bundle and runtime config.
+
+2. Proven: “The app was using the raw auth user ID as the owner identity.”
+- state.ownerId came directly from the Neon auth session user ID fields.
+- The store and all reads/writes were keyed to that value.
+
+3. Proven: “localStorage could make one device look complete even when Neon sync failed.”
+- The store had a local snapshot cache and would use it when remote loading was unavailable.
+- Sync failures were tracked, but the UI did not show enough identity detail to disambiguate a local-only snapshot from a remote one.
+
+4. Partially proven: “Same Google email may not equal same Neon auth user ID across devices.”
+- The repo could not prove live session payloads across devices without runtime inspection, but the architecture strongly indicated that data sharing depended on the raw Neon auth ID.
+- Because no canonical provider subject mapping existed, any auth-user-ID drift would split data across devices.
+
+What changed during the investigation
+
+1. Added canonical identity resolution plumbing
+Files:
+- src/store.js
+- sql/schema.sql
+- src/main.js
+
+Reason:
+- To stop treating the raw auth user ID as the durable owner identity.
+- To create a stable owner mapping path that can survive across devices and across auth-session differences.
+
+What was added:
+- A new database function in sql/schema.sql:
+  - resolve_owner_identity(...)
+- A new mapping table in sql/schema.sql:
+  - owner_auth_links
+- New canonical columns on users:
+  - canonical_key
+  - google_subject
+  - google_email
+
+Why:
+- The app needs a stable owner row that can be resolved from the same Google identity across devices.
+- The app needed a bootstrap-safe place to map auth user ID -> canonical owner ID.
+
+2. Updated Neon RLS and grants to use owner links
+File:
+- sql/schema.sql
+
+Reason:
+- To let authenticated users access the canonical owner rows linked to their current auth identity.
+
+What changed:
+- Policies for users, accounts, account_relationships, custom_fields, custom_field_values, and activity_log were changed to check owner_auth_links instead of direct auth.user_id() equality.
+- owner_auth_links got explicit grants.
+- The resolver function got an execute grant for authenticated users only.
+
+Why:
+- The old RLS depended directly on auth.user_id() and could not represent a canonical shared owner across devices.
+- The new design requires the auth user to be linked to the canonical owner row.
+
+Known limitation:
+- The schema now relies on a bootstrap-safe resolver function to create or link the owner mapping before the app reads/writes data.
+- This design was intentional, but it is the main place the next AI should continue validating for edge cases.
+
+3. Added store-side canonical identity resolution
+File:
+- src/store.js
+
+Functions added:
+- normalizeIdentityKey(value)
+- mergeCustomPlatforms(base, incoming)
+- mergeOwnerSnapshots(baseOwner, incomingSnapshot)
+- resolveOwnerIdentity(identity)
+- resetMemory()
+
+Functions updated:
+- createEmptyOwnerState(ownerId)
+- rowToUser(row)
+- userToRow(ownerId, snapshot)
+- normalizeOwnerSnapshot(ownerId, snapshot)
+- loadRemoteOwner(ownerId)
+- flushOwner(ownerId)
+- initialize(ownerId, profile, options)
+
+Reason:
+- The app needed to resolve a canonical owner before loading/saving data.
+- The app needed to merge old local snapshots into the canonical owner rather than leaving duplicate owner islands.
+- The app needed to preserve local cache as fallback only, not as the authoritative shared dataset.
+
+What changed:
+- createEmptyOwnerState now stores canonical profile metadata and sync source.
+- rowToUser/userToRow now round-trip canonical_key, google_subject, and google_email.
+- normalizeOwnerSnapshot now preserves canonical metadata and normalizes owner-owned child records.
+- mergeOwnerSnapshots merges local cache snapshots into a single owner state.
+- resolveOwnerIdentity calls the Neon RPC when available and returns a canonical owner mapping.
+- initialize now accepts aliases and merges any matching local snapshots into the canonical owner.
+- flushOwner now updates the canonical owner and stops deleting the owner row on every sync.
+- resetMemory clears in-memory owner caches on sign-out.
+
+Why:
+- Without this, the same Google account could produce separate device-specific owner islands.
+- The app had to distinguish between raw auth ID and canonical owner ID.
+- The local cache had to remain a fallback, but not the source of truth for cross-device identity.
+
+Important implementation note:
+- The store now treats the auth user ID as the linked auth identity and the canonical key as the durable owner identity.
+- Remote loading/saving still uses Neon Data API, but the owner key is no longer assumed to be a direct auth-user-ID-only singleton.
+
+4. Added identity proof / debug surface
+Files:
+- src/main.js
+- styles.css
+- src/auth.js
+
+Functions added:
+- extractIdentityClaims(result)
+- getCanonicalIdentityKey(identity)
+- renderIdentityDebug(owner)
+
+Functions updated:
+- refreshSession()
+- renderSyncStatus(owner)
+- renderDashboard()
+- submitAccountForm(form, mode, accountId)
+- sign-out handling
+- import handling
+- archive/delete handling
+- auth session normalization in src/auth.js
+
+Reason:
+- The user explicitly asked for proof before any fix.
+- The next AI needs to be able to compare auth/session state across two devices without guessing.
+
+What the debug surface shows:
+- resolved owner ID
+- canonical key
+- auth user ID
+- linked auth ID
+- session user ID
+- email
+- provider subject
+- provider name
+- identity claim keys returned by the auth response
+- sync source
+- last sync error
+
+Why:
+- This is the evidence surface that lets the next AI determine whether the mismatch is:
+  - auth-level,
+  - sync-level,
+  - cache-only,
+  - or canonical-resolution-related.
+
+5. Adjusted session/auth handling to preserve the raw Neon session payload
+File:
+- src/auth.js
+
+Function updated:
+- normalizeSession(response)
+
+Reason:
+- To expose more of the raw auth payload to the debug surface.
+
+What changed:
+- normalizeSession now returns raw data along with session/user/error.
+
+Why:
+- The app previously only exposed the flattened session/user pair, which was not enough to inspect provider claims during investigation.
+
+6. Updated sync status to show provenance
+File:
+- src/main.js
+
+Function updated:
+- renderSyncStatus(owner)
+
+Reason:
+- To make it obvious whether a loaded owner came from Neon, from merged Neon+local cache, from localStorage, or from an empty/no-remote-owner state.
+
+What changed:
+- Sync status now shows:
+  - Loaded from Neon
+  - Loaded from Neon + local cache
+  - Loaded from localStorage cache
+  - No remote owner row found yet
+- Sync status still shows last sync errors when present.
+
+Why:
+- This directly addresses the user’s concern that one device might be seeing data from cache while another sees Neon.
+
+7. Styled the identity debug surface
+File:
+- styles.css
+
+What changed:
+- Added layout/styling for:
+  - identity-debug
+  - debug-grid
+  - debug-row
+  - debug-claims
+  - debug-claims-row
+  - debug-error
+
+Why:
+- The proof surface needed to be readable and compact in the existing dashboard layout.
+
+8. Preserved edit/archive/import behavior while adjusting actor IDs
+Files:
+- src/main.js
+
+What changed:
+- Account create/update/archive/delete now use state.authUserId as the actor where available, instead of pretending the canonical owner ID is always the actor.
+- Import snapshots use state.authUserId as the actor.
+- Sign-out now clears authUserId, ownerId, identityDebug, selected account, and secret caches.
+
+Why:
+- Canonical owner and acting auth user are not the same thing.
+- Audit/activity records should keep the real auth actor.
+
+Current findings as of this handoff
+1. The app is no longer assuming raw auth user ID equals canonical owner ID.
+2. There is now a database-side resolver for canonical ownership.
+3. The app now shows enough debug data to prove what identity the auth layer returns on each device.
+4. The app still uses Neon as the source of truth, with localStorage as cache/fallback.
+5. The remaining unresolved question is whether Neon Auth returns the same auth user ID and/or the same provider subject for the same Google account across devices.
+
+What remains unresolved
+1. Live cross-device comparison of auth payloads
+- We still need to open the app on two devices and compare the debug panel values:
+  - auth user ID
+  - session user ID
+  - email
+  - provider subject
+  - canonical key
+  - linked auth ID
+
+2. Verify the resolver actually works in the live Neon environment
+- The SQL function exists in the repo, but it must be present and callable in the deployed database.
+- The next AI should verify the function is installed and that the Data API can call it.
+
+3. Verify the canonical merge path on real existing data
+- Existing owners may already exist in localStorage and/or Neon under raw auth IDs.
+- The next AI should verify whether duplicate owner rows exist and whether the resolver merges them correctly.
+
+4. Verify that all read/write paths now follow canonical owner ID end-to-end
+- The next AI should confirm:
+  - initialize
+  - listAccounts
+  - createAccount
+  - updateAccount
+  - archiveAccount
+  - deleteAccount
+  - importOwner
+  - syncOwner
+  - loadRemoteOwner
+  - flushOwner
+  all work under the canonical owner after resolution.
+
+Known limitations / cautions
+1. The database resolver is schema-heavy and should be validated carefully.
+- It introduces owner_auth_links and canonical user fields.
+- It is intended to be bootstrap-safe, but it should be reviewed for first-login behavior and duplicate-merge behavior.
+
+2. localStorage is still present as a cache/fallback.
+- This is intentional.
+- The system should not rely on localStorage as the only persistent source of truth, but it can still show stale data if the remote sync is unavailable.
+
+3. The app does not yet have a dedicated admin tool for inspecting duplicate owner rows in Neon.
+- Debugging still relies on the new on-screen identity debug surface and, if needed, direct database inspection.
+
+4. The auth provider subject field is not guaranteed by the current client shape.
+- The code now tries to surface anything available in the session payload, but the next AI should verify what Neon actually returns in practice.
+
+Files changed in this investigation
+- repo2/sql/schema.sql
+- repo2/src/auth.js
+- repo2/src/main.js
+- repo2/src/store.js
+- repo2/styles.css
+
+What the next AI should do first
+1. Open the app on two devices using the same Google account.
+2. Compare the Identity debug panel values side by side:
+   - resolved owner ID
+   - canonical key
+   - auth user ID
+   - linked auth ID
+   - session user ID
+   - email
+   - provider subject
+   - sync source
+   - last sync error
+3. Confirm whether the same Google account produces the same auth user ID and/or provider subject.
+4. Confirm that the resolver function exists in the live Neon database and returns a canonical owner row.
+5. Create a test account on one device, sync it, then refresh the other device and confirm it loads from Neon rather than just localStorage.
+6. If duplicates still appear, inspect whether the merge logic should merge by canonical key, email, or provider subject precedence.
+7. If the resolver is not callable, inspect the Neon Data API auth/RLS configuration and the function deployment status.
+
+Architecture notes for the next AI
+- Auth bootstrap:
+  - src/auth.js obtains Neon session/user.
+  - src/main.js resolves the canonical owner before store.initialize().
+
+- Data ownership:
+  - Raw auth user ID is now treated as the linked auth ID.
+  - Canonical owner ID is the durable identifier for shared data.
+
+- Persistence layers:
+  - Neon Data API remains the source of truth.
+  - localStorage remains cache/fallback only.
+  - sessionStorage is still only for the vault passphrase.
+
+- Debugging:
+  - The on-screen identity debug panel is temporary and intended for proving the root cause.
+  - It can be removed once the identity mapping is validated.
+
+Testing already performed
+- node --check src/main.js
+- node --check src/store.js
+- node --check src/auth.js
+- git diff --check
+- Verified the local preview server returned HTTP 200 at http://127.0.0.1:3001
+
+Current commit
+- a0312c3c20dbb17dd411b60c29c552ae6c76f9a6
+- Commit message: Add canonical owner resolver
+
+Expected next-step outcome
+- If the canonical resolver works live, the same Google account should converge to one canonical owner row and shared data should appear across devices.
+- If it does not, the identity debug panel should now make the reason visible enough to decide whether the remaining problem is auth identity drift, resolver deployment, or sync fallback behavior.

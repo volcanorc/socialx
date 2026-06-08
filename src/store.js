@@ -8,8 +8,6 @@ import {
   uid
 } from "./domain.js";
 
-const STORAGE_KEY = "socialx:owners:v2";
-
 const clone = globalThis.structuredClone
   ? (value) => globalThis.structuredClone(value)
   : (value) => JSON.parse(JSON.stringify(value));
@@ -82,40 +80,9 @@ function createEmptyOwnerState(ownerId) {
       remoteEnabled: false,
       lastSyncAt: null,
       lastSyncError: null,
-      source: "localStorage"
+      source: "neon"
     }
   };
-}
-
-function readAll() {
-  if (typeof localStorage === "undefined") {
-    return { owners: {} };
-  }
-
-  const parsed = safeJsonParse(localStorage.getItem(STORAGE_KEY), null);
-  if (!parsed) {
-    return { owners: {} };
-  }
-
-  if (parsed.owners) {
-    return parsed;
-  }
-
-  if (parsed.profile || parsed.accounts || parsed.accountRelationships) {
-    const ownerId = parsed.profile?.ownerId ?? parsed.ownerId ?? "local";
-    return {
-      owners: {
-        [ownerId]: parsed
-      }
-    };
-  }
-
-  return { owners: {} };
-}
-
-function writeAll(data) {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 function normalizeList(value) {
@@ -556,28 +523,19 @@ export function createStore() {
   const dirtyOwners = new Set();
   const flushTimers = new Map();
   const flushPromises = new Map();
-  let localData = readAll();
 
   function getOwnerState(ownerId) {
     if (!owners.has(ownerId)) {
-      const snapshot = localData.owners?.[ownerId] ?? createEmptyOwnerState(ownerId);
-      owners.set(ownerId, normalizeOwnerSnapshot(ownerId, snapshot));
+      owners.set(ownerId, createEmptyOwnerState(ownerId));
     }
     return owners.get(ownerId);
   }
 
-  function saveLocalSnapshot() {
-    const ownersObject = {};
-    for (const [ownerId, owner] of owners.entries()) {
-      ownersObject[ownerId] = clone(owner);
-    }
-    localData = { owners: ownersObject };
-    writeAll(localData);
-  }
-
   async function loadRemoteOwner(ownerId) {
     const client = await getNeonDataClient();
-    if (!client) return null;
+    if (!client) {
+      throw new Error("Neon Data API client unavailable");
+    }
 
     try {
       const [userRows, accountRows, relationshipRows, fieldRows, valueRows, activityRows] = await Promise.all([
@@ -621,14 +579,7 @@ export function createStore() {
       };
       return owner;
     } catch (error) {
-      const owner = getOwnerState(ownerId);
-      owner.sync = {
-        ...owner.sync,
-        remoteEnabled: Boolean(config.neonDataApiUrl),
-        lastSyncError: error?.message ?? String(error),
-        source: owner.sync.source ?? "localStorage"
-      };
-      return null;
+      throw error;
     }
   }
 
@@ -641,7 +592,14 @@ export function createStore() {
       const client = await getNeonDataClient();
       const owner = owners.get(ownerId);
       if (!client || !owner) {
-        saveLocalSnapshot();
+        if (owner) {
+          owner.sync = {
+            ...owner.sync,
+            remoteEnabled: Boolean(config.neonDataApiUrl),
+            lastSyncError: "Neon Data API client unavailable",
+            source: "error"
+          };
+        }
         return false;
       }
 
@@ -693,16 +651,14 @@ export function createStore() {
           source: "neon"
         };
         dirtyOwners.delete(ownerId);
-        saveLocalSnapshot();
         return true;
       } catch (error) {
         owner.sync = {
           ...owner.sync,
           remoteEnabled: Boolean(config.neonDataApiUrl),
           lastSyncError: error?.message ?? String(error),
-          source: owner.sync.source ?? "localStorage"
+          source: "error"
         };
-        saveLocalSnapshot();
         return false;
       }
     })().finally(() => {
@@ -743,7 +699,6 @@ export function createStore() {
       flushPromises.clear();
       dirtyOwners.clear();
       owners.clear();
-      localData = readAll();
     },
 
     async resolveOwnerIdentity(identity = {}) {
@@ -761,30 +716,23 @@ export function createStore() {
         p_google_email: identity.googleEmail ?? identity.email ?? ""
       };
 
-      const fallbackResult = {
-        ownerId: canonicalKey || authUserId,
-        canonicalKey: canonicalKey || authUserId,
-        linkedAuthUserId: authUserId,
-        googleSubject: identity.googleSubject ?? "",
-        googleEmail: identity.googleEmail ?? identity.email ?? "",
-        resolutionSource: "local-fallback",
-        mergedFrom: []
-      };
-
       const client = await getNeonDataClient();
-      if (!client || typeof client.rpc !== "function") {
-        return fallbackResult;
+      if (!client) {
+        throw new Error("Neon Data API client unavailable");
+      }
+      if (typeof client.rpc !== "function") {
+        throw new Error("Neon Data API RPC unavailable");
       }
 
       try {
         const response = await exec(client.rpc("resolve_owner_identity", payload));
         const row = Array.isArray(response) ? response[0] : response;
         if (!row) {
-          return fallbackResult;
+          throw new Error("Neon owner resolution returned no rows");
         }
         return {
-          ownerId: row.owner_auth_user_id ?? row.canonical_key ?? fallbackResult.ownerId,
-          canonicalKey: row.canonical_key ?? fallbackResult.canonicalKey,
+          ownerId: row.owner_auth_user_id ?? row.canonical_key ?? canonicalKey,
+          canonicalKey: row.canonical_key ?? canonicalKey,
           linkedAuthUserId: row.linked_auth_user_id ?? authUserId,
           googleSubject: row.google_subject ?? payload.p_google_subject ?? "",
           googleEmail: row.google_email ?? payload.p_google_email ?? "",
@@ -792,30 +740,13 @@ export function createStore() {
           mergedFrom: Array.isArray(row.merged_from) ? row.merged_from.filter(Boolean) : []
         };
       } catch (error) {
-        return {
-          ...fallbackResult,
-          resolutionSource: "rpc-error",
-          resolutionError: error?.message ?? String(error)
-        };
+        throw error;
       }
     },
 
     async initialize(ownerId, profile = {}, options = {}) {
-      const aliases = Array.isArray(options.aliases) ? options.aliases.filter(Boolean).filter((alias) => alias !== ownerId) : [];
       const remoteOwner = await loadRemoteOwner(ownerId);
-      let owner = remoteOwner ?? getOwnerState(ownerId);
-      const localSnapshots = [];
-      if (localData.owners?.[ownerId]) {
-        localSnapshots.push(localData.owners[ownerId]);
-      }
-      for (const alias of aliases) {
-        if (localData.owners?.[alias]) {
-          localSnapshots.push(localData.owners[alias]);
-        }
-      }
-      for (const snapshot of localSnapshots) {
-        owner = mergeOwnerSnapshots(owner, snapshot);
-      }
+      const owner = remoteOwner;
       owner.profile = {
         ...owner.profile,
         ...profile,
@@ -824,24 +755,10 @@ export function createStore() {
       owner.sync = {
         ...owner.sync,
         remoteEnabled: Boolean(config.neonDataApiUrl),
-        source: remoteOwner ? (localSnapshots.length ? "merged" : "neon") : (localSnapshots.length ? "localStorage" : "empty"),
-        lastSyncError: remoteOwner ? null : owner.sync.lastSyncError ?? null
+        source: "neon",
+        lastSyncError: null
       };
       owners.set(ownerId, owner);
-      if (localSnapshots.length) {
-        for (const alias of aliases) {
-          if (alias !== ownerId && localData.owners?.[alias]) {
-            delete localData.owners[alias];
-          }
-          if (alias !== ownerId && owners.has(alias)) {
-            owners.delete(alias);
-          }
-        }
-      }
-      saveLocalSnapshot();
-      if (owner.sync.remoteEnabled && (remoteOwner || localSnapshots.length)) {
-        schedulePersist(ownerId);
-      }
       return clone(owner);
     },
 
