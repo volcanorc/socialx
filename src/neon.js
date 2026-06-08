@@ -32,34 +32,37 @@ export async function getNeonAuthClient() {
 
 export async function getNeonDataClient() {
   if (!config.neonDataApiUrl) {
-    return null;
+    throw new Error("Neon Data API URL is missing.");
   }
 
   if (!dataClientPromise) {
     dataClientPromise = (async () => {
-      const [core, adapters] = await Promise.all([
-        import("https://esm.sh/@neondatabase/neon-js?bundle"),
-        import("https://esm.sh/@neondatabase/neon-js/auth/react/adapters?bundle")
-      ]);
-      const createClient = core.createClient ?? core.default?.createClient ?? null;
-      const adapterFactory = adapters.BetterAuthReactAdapter ?? adapters.default?.BetterAuthReactAdapter ?? null;
-      if (!createClient || !adapterFactory) {
-        throw new Error("Neon data client factory unavailable.");
-      }
-      return createClient({
-        auth: {
-          adapter: adapterFactory(),
-          url: config.neonAuthUrl
-        },
-        dataApi: {
-          url: config.neonDataApiUrl
+      try {
+        const { createClient } = await import("https://esm.sh/@neondatabase/neon-js@0.6.1-beta");
+        if (typeof createClient !== "function") {
+          throw new Error("Neon Data API createClient export unavailable.");
         }
-      });
-    })().catch((error) => {
-      dataClientPromise = null;
-      logLoadError("Neon Data API client", error);
-      return null;
-    });
+
+        const client = createClient({
+          auth: {
+            url: config.neonAuthUrl
+          },
+          dataApi: {
+            url: config.neonDataApiUrl
+          }
+        });
+
+        if (!client || typeof client.from !== "function" || typeof client.rpc !== "function") {
+          throw new Error("Neon Data API client missing required methods.");
+        }
+
+        return client;
+      } catch (error) {
+        dataClientPromise = null;
+        console.error("NEON BOOTSTRAP FAILURE:", error);
+        throw error;
+      }
+    })();
   }
 
   return dataClientPromise;
