@@ -1,3 +1,4 @@
+import { config } from "./config.js";
 import { getNeonDataClient } from "./neon.js";
 import {
   compact,
