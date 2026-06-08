@@ -8,7 +8,7 @@ function normalizeSession(response) {
   const session = data.session ?? data?.data?.session ?? null;
   const user = data.user ?? session?.user ?? data?.data?.user ?? null;
   const error = response?.error ?? null;
-  return { session, user, error };
+  return { session, user, error, raw: data };
 }
 
 export async function createAuthBridge() {

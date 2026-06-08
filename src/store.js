@@ -14,6 +14,10 @@ const clone = globalThis.structuredClone
   ? (value) => globalThis.structuredClone(value)
   : (value) => JSON.parse(JSON.stringify(value));
 
+function normalizeIdentityKey(value = "") {
+  return normalizeText(value).toLowerCase();
+}
+
 function normalizeCustomPlatforms(value = {}) {
   const groups = {
     social: [],
@@ -22,6 +26,22 @@ function normalizeCustomPlatforms(value = {}) {
   };
   for (const group of Object.keys(groups)) {
     const entries = Array.isArray(value?.[group]) ? value[group] : [];
+    groups[group] = [...new Set(entries.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
+  }
+  return groups;
+}
+
+function mergeCustomPlatforms(base = {}, incoming = {}) {
+  const groups = {
+    social: [],
+    bank: [],
+    government: []
+  };
+  for (const group of Object.keys(groups)) {
+    const entries = [
+      ...(Array.isArray(base?.[group]) ? base[group] : []),
+      ...(Array.isArray(incoming?.[group]) ? incoming[group] : [])
+    ];
     groups[group] = [...new Set(entries.map((entry) => String(entry ?? "").trim()).filter(Boolean))];
   }
   return groups;
@@ -40,6 +60,9 @@ function createEmptyOwnerState(ownerId) {
   return {
     profile: {
       ownerId,
+      canonicalKey: ownerId,
+      googleSubject: "",
+      googleEmail: "",
       displayName: "",
       email: "",
       avatarUrl: ""
@@ -58,7 +81,8 @@ function createEmptyOwnerState(ownerId) {
     sync: {
       remoteEnabled: false,
       lastSyncAt: null,
-      lastSyncError: null
+      lastSyncError: null,
+      source: "localStorage"
     }
   };
 }
@@ -130,6 +154,9 @@ function rowToAccount(row) {
 function rowToUser(row) {
   const settings = typeof row.settings_json === "string" ? safeJsonParse(row.settings_json, {}) : row.settings_json ?? {};
   return {
+    canonicalKey: row.canonical_key ?? row.auth_user_id ?? "",
+    googleSubject: row.google_subject ?? "",
+    googleEmail: row.google_email ?? "",
     displayName: row.display_name ?? "",
     email: row.email ?? "",
     avatarUrl: row.avatar_url ?? "",
@@ -140,6 +167,9 @@ function rowToUser(row) {
 function userToRow(ownerId, snapshot) {
   return {
     auth_user_id: ownerId,
+    canonical_key: snapshot.profile?.canonicalKey ?? ownerId,
+    google_subject: snapshot.profile?.googleSubject ?? null,
+    google_email: snapshot.profile?.googleEmail ?? null,
     display_name: snapshot.profile.displayName ?? "",
     email: snapshot.profile.email ?? "",
     avatar_url: snapshot.profile.avatarUrl ?? "",
@@ -401,6 +431,9 @@ function normalizeOwnerSnapshot(ownerId, snapshot = {}) {
   const owner = createEmptyOwnerState(ownerId);
   owner.profile = {
     ...owner.profile,
+    canonicalKey: snapshot.profile?.canonicalKey ?? snapshot.profile?.canonical_key ?? ownerId,
+    googleSubject: snapshot.profile?.googleSubject ?? snapshot.profile?.google_subject ?? "",
+    googleEmail: snapshot.profile?.googleEmail ?? snapshot.profile?.google_email ?? "",
     ...(snapshot.profile ?? {}),
     ownerId
   };
@@ -409,10 +442,22 @@ function normalizeOwnerSnapshot(ownerId, snapshot = {}) {
     ownerId,
     searchBlob: account.searchBlob ?? ""
   }));
-  owner.accountRelationships = normalizeList(snapshot.accountRelationships);
-  owner.customFields = normalizeList(snapshot.customFields);
-  owner.customFieldValues = normalizeList(snapshot.customFieldValues);
-  owner.activityLog = normalizeList(snapshot.activityLog);
+  owner.accountRelationships = normalizeList(snapshot.accountRelationships).map((relationship) => ({
+    ...relationship,
+    ownerId
+  }));
+  owner.customFields = normalizeList(snapshot.customFields).map((field) => ({
+    ...field,
+    ownerId
+  }));
+  owner.customFieldValues = normalizeList(snapshot.customFieldValues).map((value) => ({
+    ...value,
+    ownerId
+  }));
+  owner.activityLog = normalizeList(snapshot.activityLog).map((entry) => ({
+    ...entry,
+    ownerId
+  }));
   owner.settings = {
     ...owner.settings,
     ...normalizeSettings(snapshot.settings ?? {})
@@ -420,6 +465,47 @@ function normalizeOwnerSnapshot(ownerId, snapshot = {}) {
   owner.sync = {
     ...owner.sync,
     ...(snapshot.sync ?? {})
+  };
+  rewriteSearchIndex(owner);
+  return owner;
+}
+
+function mergeOwnerSnapshots(baseOwner, incomingSnapshot) {
+  const owner = clone(baseOwner);
+  const incoming = normalizeOwnerSnapshot(owner.profile.ownerId, incomingSnapshot ?? {});
+
+  owner.profile = {
+    ...owner.profile,
+    ...incoming.profile,
+    ownerId: owner.profile.ownerId
+  };
+  owner.settings = {
+    ...owner.settings,
+    ...incoming.settings,
+    customPlatforms: mergeCustomPlatforms(owner.settings.customPlatforms, incoming.settings.customPlatforms)
+  };
+
+  const mergeById = (existing = [], incomingList = []) => {
+    const map = new Map();
+    for (const item of existing) {
+      if (item?.id) map.set(item.id, clone(item));
+    }
+    for (const item of incomingList) {
+      if (item?.id) map.set(item.id, clone(item));
+    }
+    return [...map.values()];
+  };
+
+  owner.accounts = mergeById(owner.accounts, incoming.accounts);
+  owner.accountRelationships = mergeById(owner.accountRelationships, incoming.accountRelationships);
+  owner.customFields = mergeById(owner.customFields, incoming.customFields);
+  owner.customFieldValues = mergeById(owner.customFieldValues, incoming.customFieldValues);
+  owner.activityLog = mergeById(owner.activityLog, incoming.activityLog).sort(
+    (a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0)
+  );
+  owner.sync = {
+    ...owner.sync,
+    ...incoming.sync
   };
   rewriteSearchIndex(owner);
   return owner;
@@ -509,6 +595,9 @@ export function createStore() {
         const userProfile = rowToUser(userRow);
         owner.profile = {
           ownerId,
+          canonicalKey: userProfile.canonicalKey ?? ownerId,
+          googleSubject: userProfile.googleSubject ?? "",
+          googleEmail: userProfile.googleEmail ?? "",
           displayName: userProfile.displayName,
           email: userProfile.email,
           avatarUrl: userProfile.avatarUrl
@@ -527,7 +616,8 @@ export function createStore() {
       owner.sync = {
         remoteEnabled: Boolean(config.neonDataApiUrl),
         lastSyncAt: nowIso(),
-        lastSyncError: null
+        lastSyncError: null,
+        source: "neon"
       };
       return owner;
     } catch (error) {
@@ -535,7 +625,8 @@ export function createStore() {
       owner.sync = {
         ...owner.sync,
         remoteEnabled: Boolean(config.neonDataApiUrl),
-        lastSyncError: error?.message ?? String(error)
+        lastSyncError: error?.message ?? String(error),
+        source: owner.sync.source ?? "localStorage"
       };
       return null;
     }
@@ -556,12 +647,14 @@ export function createStore() {
 
       const snapshot = clone(owner);
       try {
-        await exec(client.from("users").delete().eq("auth_user_id", ownerId));
         await exec(
-          client.from("users").insert([
-            userToRow(ownerId, snapshot)
-          ])
+          client.from("activity_log").delete().eq("owner_auth_user_id", ownerId)
         );
+        await exec(client.from("custom_field_values").delete().eq("owner_auth_user_id", ownerId));
+        await exec(client.from("custom_fields").delete().eq("owner_auth_user_id", ownerId));
+        await exec(client.from("account_relationships").delete().eq("owner_auth_user_id", ownerId));
+        await exec(client.from("accounts").delete().eq("owner_auth_user_id", ownerId));
+        await exec(client.from("users").upsert(userToRow(ownerId, snapshot), { onConflict: "auth_user_id" }));
 
         if (snapshot.accounts.length) {
           await exec(client.from("accounts").insert(snapshot.accounts.map((account) => accountToRow(ownerId, account))));
@@ -596,7 +689,8 @@ export function createStore() {
         owner.sync = {
           remoteEnabled: Boolean(config.neonDataApiUrl),
           lastSyncAt: nowIso(),
-          lastSyncError: null
+          lastSyncError: null,
+          source: "neon"
         };
         dirtyOwners.delete(ownerId);
         saveLocalSnapshot();
@@ -605,7 +699,8 @@ export function createStore() {
         owner.sync = {
           ...owner.sync,
           remoteEnabled: Boolean(config.neonDataApiUrl),
-          lastSyncError: error?.message ?? String(error)
+          lastSyncError: error?.message ?? String(error),
+          source: owner.sync.source ?? "localStorage"
         };
         saveLocalSnapshot();
         return false;
@@ -640,9 +735,87 @@ export function createStore() {
   }
 
   return {
-    async initialize(ownerId, profile = {}) {
+    resetMemory() {
+      for (const timer of flushTimers.values()) {
+        clearTimeout(timer);
+      }
+      flushTimers.clear();
+      flushPromises.clear();
+      dirtyOwners.clear();
+      owners.clear();
+      localData = readAll();
+    },
+
+    async resolveOwnerIdentity(identity = {}) {
+      const authUserId = String(identity.authUserId ?? "").trim();
+      const canonicalKey = String(
+        identity.canonicalKey ?? identity.googleSubject ?? identity.googleEmail ?? identity.email ?? authUserId
+      ).trim();
+      const payload = {
+        p_auth_user_id: authUserId,
+        p_canonical_key: canonicalKey,
+        p_display_name: identity.displayName ?? "",
+        p_email: identity.email ?? "",
+        p_avatar_url: identity.avatarUrl ?? "",
+        p_google_subject: identity.googleSubject ?? "",
+        p_google_email: identity.googleEmail ?? identity.email ?? ""
+      };
+
+      const fallbackResult = {
+        ownerId: canonicalKey || authUserId,
+        canonicalKey: canonicalKey || authUserId,
+        linkedAuthUserId: authUserId,
+        googleSubject: identity.googleSubject ?? "",
+        googleEmail: identity.googleEmail ?? identity.email ?? "",
+        resolutionSource: "local-fallback",
+        mergedFrom: []
+      };
+
+      const client = await getNeonDataClient();
+      if (!client || typeof client.rpc !== "function") {
+        return fallbackResult;
+      }
+
+      try {
+        const response = await exec(client.rpc("resolve_owner_identity", payload));
+        const row = Array.isArray(response) ? response[0] : response;
+        if (!row) {
+          return fallbackResult;
+        }
+        return {
+          ownerId: row.owner_auth_user_id ?? row.canonical_key ?? fallbackResult.ownerId,
+          canonicalKey: row.canonical_key ?? fallbackResult.canonicalKey,
+          linkedAuthUserId: row.linked_auth_user_id ?? authUserId,
+          googleSubject: row.google_subject ?? payload.p_google_subject ?? "",
+          googleEmail: row.google_email ?? payload.p_google_email ?? "",
+          resolutionSource: row.resolution_source ?? "neon",
+          mergedFrom: Array.isArray(row.merged_from) ? row.merged_from.filter(Boolean) : []
+        };
+      } catch (error) {
+        return {
+          ...fallbackResult,
+          resolutionSource: "rpc-error",
+          resolutionError: error?.message ?? String(error)
+        };
+      }
+    },
+
+    async initialize(ownerId, profile = {}, options = {}) {
+      const aliases = Array.isArray(options.aliases) ? options.aliases.filter(Boolean).filter((alias) => alias !== ownerId) : [];
       const remoteOwner = await loadRemoteOwner(ownerId);
-      const owner = remoteOwner ?? getOwnerState(ownerId);
+      let owner = remoteOwner ?? getOwnerState(ownerId);
+      const localSnapshots = [];
+      if (localData.owners?.[ownerId]) {
+        localSnapshots.push(localData.owners[ownerId]);
+      }
+      for (const alias of aliases) {
+        if (localData.owners?.[alias]) {
+          localSnapshots.push(localData.owners[alias]);
+        }
+      }
+      for (const snapshot of localSnapshots) {
+        owner = mergeOwnerSnapshots(owner, snapshot);
+      }
       owner.profile = {
         ...owner.profile,
         ...profile,
@@ -650,11 +823,23 @@ export function createStore() {
       };
       owner.sync = {
         ...owner.sync,
-        remoteEnabled: Boolean(config.neonDataApiUrl)
+        remoteEnabled: Boolean(config.neonDataApiUrl),
+        source: remoteOwner ? (localSnapshots.length ? "merged" : "neon") : (localSnapshots.length ? "localStorage" : "empty"),
+        lastSyncError: remoteOwner ? null : owner.sync.lastSyncError ?? null
       };
       owners.set(ownerId, owner);
+      if (localSnapshots.length) {
+        for (const alias of aliases) {
+          if (alias !== ownerId && localData.owners?.[alias]) {
+            delete localData.owners[alias];
+          }
+          if (alias !== ownerId && owners.has(alias)) {
+            owners.delete(alias);
+          }
+        }
+      }
       saveLocalSnapshot();
-      if (owner.sync.remoteEnabled) {
+      if (owner.sync.remoteEnabled && (remoteOwner || localSnapshots.length)) {
         schedulePersist(ownerId);
       }
       return clone(owner);

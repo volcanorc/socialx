@@ -1824,6 +1824,72 @@ mark {
   line-height: 1.55;
 }
 
+.identity-debug {
+  display: grid;
+  gap: 10px;
+}
+
+.identity-debug > summary {
+  list-style: none;
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.identity-debug > summary::-webkit-details-marker {
+  display: none;
+}
+
+.debug-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.debug-row,
+.debug-claims-row {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.debug-claims {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+  border-top: 1px dashed rgba(201, 137, 35, 0.18);
+}
+
+.debug-claims-title {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  color: rgba(122, 90, 18, 0.8);
+}
+
+.debug-label {
+  color: rgba(122, 90, 18, 0.82);
+  font-size: 0.79rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 800;
+}
+
+.debug-value {
+  color: inherit;
+  min-width: 0;
+}
+
+.debug-error {
+  font-size: 0.82rem;
+  color: #9a3d25;
+  background: rgba(217, 77, 95, 0.08);
+  border: 1px solid rgba(217, 77, 95, 0.18);
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
 .form-note {
   margin-bottom: 12px;
 }
@@ -1873,7 +1939,9 @@ mark {
   .summary-row,
   .drawer-grid,
   .form-grid,
-  .custom-field-item {
+  .custom-field-item,
+  .debug-row,
+  .debug-claims-row {
     grid-template-columns: 1fr;
   }
 

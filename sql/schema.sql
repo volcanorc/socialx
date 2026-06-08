@@ -2,6 +2,9 @@ create extension if not exists pgcrypto;
 
 create table if not exists users (
   auth_user_id text primary key,
+  canonical_key text unique,
+  google_subject text unique,
+  google_email text unique,
   display_name text,
   email text,
   avatar_url text,
@@ -9,6 +12,15 @@ create table if not exists users (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create table if not exists owner_auth_links (
+  auth_user_id text primary key,
+  owner_auth_user_id text not null references users(auth_user_id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists owner_auth_links_owner_idx on owner_auth_links (owner_auth_user_id);
 
 create table if not exists accounts (
   id text primary key,
@@ -117,6 +129,166 @@ create table if not exists activity_log (
 
 create index if not exists activity_owner_idx on activity_log (owner_auth_user_id, created_at desc);
 
+create or replace function resolve_owner_identity(
+  p_auth_user_id text,
+  p_canonical_key text,
+  p_display_name text default '',
+  p_email text default '',
+  p_avatar_url text default '',
+  p_google_subject text default '',
+  p_google_email text default ''
+)
+returns table (
+  owner_auth_user_id text,
+  canonical_key text,
+  linked_auth_user_id text,
+  google_subject text,
+  google_email text,
+  resolution_source text,
+  merged_from text[]
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_auth_user_id text := nullif(btrim(coalesce(p_auth_user_id, '')), '');
+  v_canonical_key text := nullif(btrim(coalesce(p_canonical_key, '')), '');
+  v_display_name text := nullif(btrim(coalesce(p_display_name, '')), '');
+  v_email text := nullif(lower(btrim(coalesce(p_email, ''))), '');
+  v_avatar_url text := nullif(btrim(coalesce(p_avatar_url, '')), '');
+  v_google_subject text := nullif(btrim(coalesce(p_google_subject, '')), '');
+  v_google_email text := nullif(lower(btrim(coalesce(p_google_email, p_email, ''))), '');
+  v_existing_owner_id text := null;
+  v_target_owner_id text := null;
+  v_resolution_source text := 'created';
+  v_merged_from text[] := array[]::text[];
+begin
+  if v_auth_user_id is null then
+    raise exception 'auth user id is required';
+  end if;
+
+  if auth.user_id() is not null and auth.user_id() <> v_auth_user_id then
+    raise exception 'auth user mismatch';
+  end if;
+
+  v_canonical_key := coalesce(nullif(btrim(coalesce(v_canonical_key, '')), ''), v_google_subject, v_google_email, v_email, v_auth_user_id);
+  v_target_owner_id := v_canonical_key;
+
+  select u.auth_user_id
+  into v_existing_owner_id
+  from users u
+  where u.auth_user_id = v_target_owner_id
+     or u.canonical_key = v_target_owner_id
+     or (v_google_subject is not null and u.google_subject = v_google_subject)
+     or (v_google_email is not null and u.google_email = v_google_email)
+  order by case when u.auth_user_id = v_target_owner_id then 0 else 1 end, u.created_at asc
+  limit 1;
+
+  if v_existing_owner_id is null then
+    insert into users (
+      auth_user_id,
+      canonical_key,
+      google_subject,
+      google_email,
+      display_name,
+      email,
+      avatar_url
+    )
+    values (
+      v_target_owner_id,
+      v_target_owner_id,
+      v_google_subject,
+      v_google_email,
+      coalesce(v_display_name, 'Account owner'),
+      v_email,
+      v_avatar_url
+    );
+  elsif v_existing_owner_id <> v_target_owner_id then
+    if exists (select 1 from users where auth_user_id = v_target_owner_id) then
+      update users
+      set
+        canonical_key = v_target_owner_id,
+        google_subject = coalesce(users.google_subject, v_google_subject),
+        google_email = coalesce(users.google_email, v_google_email),
+        display_name = coalesce(nullif(users.display_name, ''), v_display_name, users.display_name),
+        email = coalesce(users.email, v_email),
+        avatar_url = coalesce(users.avatar_url, v_avatar_url),
+        updated_at = now()
+      where auth_user_id = v_target_owner_id;
+    else
+      insert into users (
+        auth_user_id,
+        canonical_key,
+        google_subject,
+        google_email,
+        display_name,
+        email,
+        avatar_url,
+        settings_json,
+        created_at,
+        updated_at
+      )
+      select
+        v_target_owner_id,
+        v_target_owner_id,
+        coalesce(v_google_subject, google_subject),
+        coalesce(v_google_email, google_email),
+        coalesce(nullif(v_display_name, ''), nullif(display_name, ''), 'Account owner'),
+        coalesce(v_email, email),
+        coalesce(v_avatar_url, avatar_url),
+        settings_json,
+        created_at,
+        updated_at
+      from users
+      where auth_user_id = v_existing_owner_id;
+    end if;
+
+    update accounts set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    update account_relationships set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    update custom_fields set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    update custom_field_values set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    update activity_log set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    update owner_auth_links set owner_auth_user_id = v_target_owner_id where owner_auth_user_id = v_existing_owner_id;
+    delete from users where auth_user_id = v_existing_owner_id;
+
+    v_merged_from := array_append(v_merged_from, v_existing_owner_id);
+    v_resolution_source := 'merged';
+  else
+    update users
+    set
+      canonical_key = v_target_owner_id,
+      google_subject = coalesce(users.google_subject, v_google_subject),
+      google_email = coalesce(users.google_email, v_google_email),
+      display_name = coalesce(nullif(users.display_name, ''), v_display_name, users.display_name),
+      email = coalesce(users.email, v_email),
+      avatar_url = coalesce(users.avatar_url, v_avatar_url),
+      updated_at = now()
+    where auth_user_id = v_target_owner_id;
+
+    v_resolution_source := 'existing';
+  end if;
+
+  insert into owner_auth_links (auth_user_id, owner_auth_user_id)
+  values (v_auth_user_id, v_target_owner_id)
+  on conflict (auth_user_id) do update
+    set owner_auth_user_id = excluded.owner_auth_user_id,
+        updated_at = now();
+
+  return query
+  select
+    v_target_owner_id,
+    v_target_owner_id,
+    v_auth_user_id,
+    v_google_subject,
+    v_google_email,
+    v_resolution_source,
+    v_merged_from;
+end;
+$$;
+
+grant execute on function resolve_owner_identity(text, text, text, text, text, text, text) to authenticated;
+
 create or replace function set_updated_at()
 returns trigger
 language plpgsql
@@ -157,40 +329,131 @@ alter table activity_log enable row level security;
 create policy "users own profile"
 on users
 for all
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = users.auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = users.auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
+
+create policy "owner auth links own mapping"
+on owner_auth_links
+for all
 using (auth.user_id() = auth_user_id)
 with check (auth.user_id() = auth_user_id);
 
 create policy "accounts owner only"
 on accounts
 for all
-using (auth.user_id() = owner_auth_user_id)
-with check (auth.user_id() = owner_auth_user_id);
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = accounts.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = accounts.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
 
 create policy "relationships owner only"
 on account_relationships
 for all
-using (auth.user_id() = owner_auth_user_id)
-with check (auth.user_id() = owner_auth_user_id);
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = account_relationships.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = account_relationships.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
 
 create policy "custom fields owner only"
 on custom_fields
 for all
-using (auth.user_id() = owner_auth_user_id)
-with check (auth.user_id() = owner_auth_user_id);
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = custom_fields.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = custom_fields.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
 
 create policy "custom field values owner only"
 on custom_field_values
 for all
-using (auth.user_id() = owner_auth_user_id)
-with check (auth.user_id() = owner_auth_user_id);
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = custom_field_values.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = custom_field_values.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
 
 create policy "activity owner only"
 on activity_log
 for all
-using (auth.user_id() = owner_auth_user_id)
-with check (auth.user_id() = owner_auth_user_id);
+using (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = activity_log.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from owner_auth_links
+    where owner_auth_links.owner_auth_user_id = activity_log.owner_auth_user_id
+      and owner_auth_links.auth_user_id = auth.user_id()
+  )
+);
 
 grant usage on schema public to authenticated, anonymous;
+grant select, insert, update, delete on owner_auth_links to authenticated, anonymous;
 grant select, insert, update, delete on users to authenticated, anonymous;
 grant select, insert, update, delete on accounts to authenticated, anonymous;
 grant select, insert, update, delete on account_relationships to authenticated, anonymous;

@@ -27,7 +27,9 @@ const state = {
   authReady: false,
   auth: null,
   session: null,
+  authUserId: null,
   ownerId: null,
+  identityDebug: null,
   search: "",
   filters: {
     platform: "all",
@@ -63,6 +65,56 @@ function getInitials(text = "") {
 
 function getProfileImageUrl(user) {
   return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
+}
+
+function extractIdentityClaims(result = {}) {
+  const user = result.user ?? {};
+  const session = result.session ?? {};
+  const raw = result.raw ?? {};
+  const sessionUser = session.user ?? {};
+  const rawUser = raw.user ?? raw.session?.user ?? {};
+  const rawSession = raw.session ?? {};
+  const knownValues = [
+    user.sub,
+    user.subject,
+    user.providerSubject,
+    user.provider_subject,
+    sessionUser.sub,
+    sessionUser.subject,
+    sessionUser.providerSubject,
+    sessionUser.provider_subject,
+    session.sub,
+    session.subject,
+    rawUser.sub,
+    rawUser.subject,
+    rawUser.providerSubject,
+    rawUser.provider_subject,
+    rawSession.sub,
+    rawSession.subject
+  ].filter(Boolean);
+  const rawUserKeys = Object.keys(user ?? {});
+  const rawSessionUserKeys = Object.keys(sessionUser ?? {});
+  const rawResponseKeys = Object.keys(raw ?? {});
+  return {
+    authUserId: user.id ?? session.userId ?? sessionUser.id ?? null,
+    sessionUserId: session.userId ?? sessionUser.id ?? null,
+    email: user.email ?? sessionUser.email ?? "",
+    displayName: user.name ?? user.displayName ?? sessionUser.name ?? sessionUser.displayName ?? "",
+    avatarUrl: user.image ?? user.avatarUrl ?? sessionUser.image ?? sessionUser.avatarUrl ?? "",
+    googleSubject: knownValues[0] ?? "",
+    provider: user.provider ?? session.provider ?? sessionUser.provider ?? "",
+    rawUserKeys,
+    rawSessionUserKeys,
+    rawResponseKeys
+  };
+}
+
+function getCanonicalIdentityKey(identity = {}) {
+  return (
+    String(identity.googleSubject ?? "").trim() ||
+    normalizeText(identity.googleEmail ?? identity.email ?? "") ||
+    String(identity.authUserId ?? "").trim()
+  );
 }
 
 function getDefaultPlatformSelection(category = "social") {
@@ -776,26 +828,55 @@ async function refreshSession() {
   if (!state.auth) return;
   const result = await state.auth.getSession();
   state.session = result.user ? result : null;
-  state.ownerId = result.user?.id ?? result.session?.userId ?? result.session?.user?.id ?? null;
-  if (state.ownerId) {
+  state.authUserId = result.user?.id ?? result.session?.userId ?? result.session?.user?.id ?? null;
+  if (state.authUserId) {
+    const identity = extractIdentityClaims(result);
     const profile = {
-      ownerId: state.ownerId,
-      displayName: result.user?.name ?? result.user?.displayName ?? result.user?.email ?? "Account owner",
-      email: result.user?.email ?? "",
-      avatarUrl: result.user?.image ?? result.user?.avatarUrl ?? ""
+      ownerId: identity.authUserId,
+      canonicalKey: getCanonicalIdentityKey(identity),
+      googleSubject: identity.googleSubject ?? "",
+      googleEmail: identity.email ?? "",
+      displayName: identity.displayName ?? identity.email ?? "Account owner",
+      email: identity.email ?? "",
+      avatarUrl: identity.avatarUrl ?? ""
     };
-    void store.initialize(state.ownerId, profile)
-      .then(() => {
-        const current = store.getOwner(state.ownerId);
-        if (!current.profile.displayName) {
-          store.updateProfile(state.ownerId, profile);
-        }
-        store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
-        render();
-      })
-      .catch((error) => {
-        console.warn("Failed to hydrate Neon store.", error);
+    try {
+      const resolved = await store.resolveOwnerIdentity({
+        authUserId: state.authUserId,
+        canonicalKey: profile.canonicalKey,
+        googleSubject: profile.googleSubject,
+        googleEmail: profile.googleEmail,
+        displayName: profile.displayName,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl
       });
+      state.ownerId = resolved.ownerId;
+      state.identityDebug = {
+        ...identity,
+        ...resolved,
+        authUserId: state.authUserId,
+        sessionUserId: identity.sessionUserId,
+        email: profile.email,
+        googleSubject: resolved.googleSubject ?? profile.googleSubject,
+        canonicalKey: resolved.canonicalKey ?? profile.canonicalKey
+      };
+      await store.initialize(state.ownerId, profile, {
+        aliases: resolved.linkedAuthUserId && resolved.linkedAuthUserId !== state.ownerId ? [resolved.linkedAuthUserId] : [state.authUserId]
+      });
+      if (!state.ownerId) return;
+      const current = store.getOwner(state.ownerId);
+      if (!current.profile.displayName) {
+        store.updateProfile(state.ownerId, profile);
+      }
+      store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
+      render();
+    } catch (error) {
+      console.warn("Failed to hydrate Neon store.", error);
+    }
+  } else {
+    state.ownerId = null;
+    state.identityDebug = null;
+    state.selectedAccountId = null;
   }
   syncRoute();
 }
@@ -863,11 +944,80 @@ function renderSyncStatus(owner) {
     `;
   }
   const lastSyncLabel = sync.lastSyncAt ? formatRelative(sync.lastSyncAt) : "just now";
+  const sourceLabel =
+    sync.source === "merged"
+      ? "Loaded from Neon + local cache"
+      : sync.source === "localStorage"
+        ? "Loaded from localStorage cache"
+        : sync.source === "empty"
+          ? "No remote owner row found yet"
+          : "Loaded from Neon";
+  const titleLabel = sync.source === "localStorage" ? "Local cache active" : "Connected to Neon";
+  const tone =
+    sync.source === "localStorage"
+      ? "background: rgba(255, 244, 214, 0.85); border-color: rgba(201, 137, 35, 0.18); color: #7a5a12;"
+      : "background: rgba(112, 225, 166, 0.08); border-color: rgba(112, 225, 166, 0.16); color: #d8ffe8;";
   return `
-    <div class="note-box" style="background: rgba(112, 225, 166, 0.08); border-color: rgba(112, 225, 166, 0.16); color: #d8ffe8;">
-      <strong>Connected to Neon</strong><br />
-      Last sync ${escapeHtml(lastSyncLabel)}.
+    <div class="note-box" style="${tone}">
+      <strong>${escapeHtml(titleLabel)}</strong><br />
+      ${escapeHtml(sourceLabel)}. Last sync ${escapeHtml(lastSyncLabel)}.
     </div>
+  `;
+}
+
+function renderIdentityDebug(owner) {
+  const debug = state.identityDebug;
+  if (!debug) return "";
+  const sync = owner?.sync ?? {};
+  const rows = [
+    ["Resolved owner ID", debug.ownerId ?? state.ownerId ?? ""],
+    ["Canonical key", debug.canonicalKey ?? ""],
+    ["Auth user ID", debug.authUserId ?? state.authUserId ?? ""],
+    ["Linked auth ID", debug.linkedAuthUserId ?? ""],
+    ["Session user ID", debug.sessionUserId ?? ""],
+    ["Email", debug.email ?? ""],
+    ["Provider subject", debug.googleSubject ?? ""],
+    ["Provider", debug.provider ?? ""],
+    ["Resolution source", debug.resolutionSource ?? ""],
+    ["Loaded from", sync.source ?? ""],
+    ["Last sync error", sync.lastSyncError ?? ""]
+  ]
+    .filter(([, value]) => value)
+    .map(
+      ([label, value]) => `
+        <div class="debug-row">
+          <span class="debug-label">${escapeHtml(label)}</span>
+          <span class="debug-value truncate">${escapeHtml(String(value))}</span>
+        </div>
+      `
+    )
+    .join("");
+
+  return `
+    <details class="note-box identity-debug" open>
+      <summary>Identity debug</summary>
+      <div class="debug-grid">
+        ${rows}
+      </div>
+      ${(debug.rawUserKeys?.length || debug.rawSessionUserKeys?.length || debug.rawResponseKeys?.length) ? `
+        <div class="debug-claims">
+          <div class="debug-claims-title">Identity claims</div>
+          <div class="debug-claims-row">
+            <span class="debug-label">response keys</span>
+            <span class="debug-value truncate">${escapeHtml((debug.rawResponseKeys ?? []).join(", ") || "none")}</span>
+          </div>
+          <div class="debug-claims-row">
+            <span class="debug-label">user keys</span>
+            <span class="debug-value truncate">${escapeHtml((debug.rawUserKeys ?? []).join(", ") || "none")}</span>
+          </div>
+          <div class="debug-claims-row">
+            <span class="debug-label">session user keys</span>
+            <span class="debug-value truncate">${escapeHtml((debug.rawSessionUserKeys ?? []).join(", ") || "none")}</span>
+          </div>
+        </div>
+      ` : ""}
+      ${debug.resolutionError ? `<div class="debug-error">${escapeHtml(debug.resolutionError)}</div>` : ""}
+    </details>
   `;
 }
 
@@ -905,7 +1055,7 @@ async function evaluateDuplicates(form, ignoreId = null) {
 }
 
 async function submitAccountForm(form, mode, accountId = null) {
-  if (!state.ownerId || !state.session?.user?.id && !state.session?.userId && !state.ownerId) return;
+  if (!state.ownerId || (!state.authUserId && !state.session?.user?.id && !state.session?.userId)) return;
   const draft = getDraftFromForm(form);
   if (draft.linkMode === "linkedGoogle" && !draft.anchorAccountId) {
     setToast("Choose a Google account", "Linked accounts need an existing Google anchor.", "danger");
@@ -948,15 +1098,16 @@ async function submitAccountForm(form, mode, accountId = null) {
     archived: preserveArchived ? true : Boolean(draft.archived ?? false),
     status: preservedStatus
   };
+  const actorId = state.authUserId ?? state.ownerId;
 
   if (mode === "create") {
-    const account = store.createAccount(state.ownerId, state.ownerId, payload);
+    const account = store.createAccount(state.ownerId, actorId, payload);
     state.selectedAccountId = account.id;
     delete state.secretCache[account.id];
     delete state.revealedSecrets[account.id];
     setToast("Account created", `${account.label} is now part of your vault.`, "success");
   } else {
-    const account = store.updateAccount(state.ownerId, state.ownerId, accountId, payload);
+    const account = store.updateAccount(state.ownerId, actorId, accountId, payload);
     state.selectedAccountId = account.id;
     delete state.secretCache[account.id];
     delete state.revealedSecrets[account.id];
@@ -1679,6 +1830,8 @@ function renderDashboard() {
       <div class="layout layout-clean">
         <main class="content wide">
           ${renderTopbar(owner)}
+          ${renderSyncStatus(owner)}
+          ${renderIdentityDebug(owner)}
           ${renderFilters(owner)}
           ${getRoute().name === "account-create" ? renderAccountEditorWorkspace(owner) : `
             <section class="workspace single">
@@ -1772,10 +1925,13 @@ function bindGlobalEvents() {
       case "sign-out":
         await state.auth?.signOut?.();
         state.session = null;
+        state.authUserId = null;
         state.ownerId = null;
+        state.identityDebug = null;
         state.selectedAccountId = null;
         state.secretCache = {};
         state.revealedSecrets = {};
+        store.resetMemory?.();
         navigate("#signin");
         render();
         break;
@@ -1845,13 +2001,13 @@ function bindGlobalEvents() {
         break;
       }
       case "toggle-archive":
-        store.archiveAccount(state.ownerId, state.ownerId, id, !(store.getAccount(state.ownerId, id)?.archived ?? false));
+        store.archiveAccount(state.ownerId, state.authUserId ?? state.ownerId, id, !(store.getAccount(state.ownerId, id)?.archived ?? false));
         setToast("Archive updated", "The account archive state changed.", "success");
         render();
         break;
       case "delete-account":
         if (confirm("Delete this account and all connected relationships?")) {
-          store.deleteAccount(state.ownerId, state.ownerId, id);
+          store.deleteAccount(state.ownerId, state.authUserId ?? state.ownerId, id);
           if (state.selectedAccountId === id) {
             state.selectedAccountId = null;
           }
@@ -2008,7 +2164,7 @@ function bindGlobalEvents() {
       const text = new FormData(form).get("snapshot")?.toString() ?? "";
       try {
         const parsed = JSON.parse(text);
-        store.importOwner(state.ownerId, parsed, state.ownerId);
+        store.importOwner(state.ownerId, parsed, state.authUserId ?? state.ownerId);
         await store.syncOwner(state.ownerId);
         setToast("Import complete", "Vault snapshot restored successfully.", "success");
         goToDashboard();
