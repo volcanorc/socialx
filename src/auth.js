@@ -1,84 +1,44 @@
 import { config, getAppOrigin } from "./config.js";
-import { getNeonAuthClient } from "./neon.js";
+import { getNeonClient } from "./neon.js";
 
-let cachedClient = null;
-
-function normalizeSession(response) {
-  const data = response?.data ?? response ?? {};
-  const session = data.session ?? data?.data?.session ?? null;
-  const user = data.user ?? session?.user ?? data?.data?.user ?? null;
-  const error = response?.error ?? null;
-  return { session, user, error, raw: data };
-}
+let cachedBridge = null;
 
 export async function createAuthBridge() {
-  if (cachedClient) {
-    return cachedClient;
+  if (cachedBridge) return cachedBridge;
+
+  const client = await getNeonClient();
+
+  if (!client) {
+    return {
+      client: null,
+      getSession: async () => ({ session: null, user: null, error: new Error("Neon client unavailable") }),
+      signInWithGoogle: async () => { throw new Error("Neon client unavailable"); },
+      signOut: async () => {},
+    };
   }
 
-  const client = await getNeonAuthClient();
-
   async function getSession() {
-    if (!client) {
-      return { user: null, session: null, error: new Error("Auth client unavailable") };
-    }
     try {
-      const response = await (client.getSession?.() ?? client.session?.() ?? Promise.resolve(null));
-      return normalizeSession(response);
+      const { data, error } = await client.auth.getSession();
+      return {
+        session: data?.session ?? null,
+        user:    data?.session?.user ?? null,
+        error:   error ?? null,
+      };
     } catch (error) {
-      return { user: null, session: null, error };
+      return { session: null, user: null, error };
     }
   }
 
   async function signInWithGoogle() {
-    if (!client) {
-      throw new Error("Auth client unavailable");
-    }
-
     const callbackURL = `${getAppOrigin()}${config.signInCallback}`;
-    if (client.signIn?.social) {
-      return client.signIn.social({
-        provider: "google",
-        callbackURL
-      });
-    }
-
-    if (client.signInWithOAuth) {
-      return client.signInWithOAuth({
-        provider: "google",
-        callbackURL,
-        options: {
-          redirectTo: callbackURL
-        }
-      });
-    }
-
-    if (client.signInWithSocial) {
-      return client.signInWithSocial({
-        provider: "google",
-        callbackURL
-      });
-    }
-
-    throw new Error("This Neon Auth client build does not expose a supported Google sign-in method.");
+    return client.auth.signIn.social({ provider: "google", callbackURL });
   }
 
   async function signOut() {
-    if (!client) return;
-    if (client.signOut) {
-      return client.signOut();
-    }
-    if (client.logout) {
-      return client.logout();
-    }
+    return client.auth.signOut();
   }
 
-  cachedClient = {
-    client,
-    getSession,
-    signInWithGoogle,
-    signOut
-  };
-
-  return cachedClient;
+  cachedBridge = { client, getSession, signInWithGoogle, signOut };
+  return cachedBridge;
 }
