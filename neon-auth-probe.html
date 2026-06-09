@@ -1,0 +1,19 @@
+<!doctype html><meta charset=utf-8><pre id=o>loading</pre><script type=module>
+const out = document.getElementById('o');
+try {
+  const mod = await import('https://esm.sh/@neondatabase/neon-js@0.6.1-beta');
+  const client = mod.createClient({ auth: { url: 'https://ep-nameless-bar-ao306hfx.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth' }, dataApi: { url: 'https://ep-nameless-bar-ao306hfx.apirest.c-2.ap-southeast-1.aws.neon.tech/neondb/rest/v1' } });
+  out.textContent = JSON.stringify({
+    createClient: typeof mod.createClient,
+    authKeys: client.auth ? Object.keys(client.auth).slice(0, 30) : [],
+    authGetSession: typeof client.auth?.getSession,
+    authSignIn: typeof client.auth?.signIn,
+    authSignInSocial: typeof client.auth?.signIn?.social,
+    authSignOut: typeof client.auth?.signOut,
+    authSession: typeof client.auth?.session,
+    authGetUser: typeof client.auth?.getUser,
+  }, null, 2);
+} catch (e) {
+  out.textContent = JSON.stringify({ ok:false, name:e.name, message:e.message }, null, 2);
+}
+</script>

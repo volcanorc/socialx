@@ -32,7 +32,19 @@ export async function createAuthBridge() {
 
   async function signInWithGoogle() {
     const callbackURL = `${getAppOrigin()}${config.signInCallback}`;
-    return client.auth.signIn.social({ provider: "google", callbackURL });
+    const response = await client.auth.signIn.social({ provider: "google", callbackURL });
+    const redirectURL =
+      response?.data?.url ??
+      response?.data?.redirectURL ??
+      response?.url ??
+      response?.redirectURL ??
+      null;
+
+    if (redirectURL && typeof location !== "undefined" && redirectURL !== location.href) {
+      location.assign(redirectURL);
+    }
+
+    return response;
   }
 
   async function signOut() {

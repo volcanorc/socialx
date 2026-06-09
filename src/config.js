@@ -12,5 +12,6 @@ export const config = {
 };
 
 export function getAppOrigin() {
-  return `${location.origin}${location.pathname}`;
+  const pathname = location.pathname.replace(/index\.html?$/i, "");
+  return `${location.origin}${pathname}`;
 }

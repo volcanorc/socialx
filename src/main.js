@@ -792,6 +792,10 @@ function goToDashboard() {
   navigate("#dashboard");
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function syncRoute() {
   const route = getRoute();
   if (!state.session && route.name !== "signin") {
@@ -820,17 +824,31 @@ async function bootstrapAuth() {
   render();
   state.auth = await createAuthBridge();
   state.authReady = true;
-  await refreshSession();
+  await refreshSession({ retry: true });
   state.loading = false;
   render();
 }
 
-async function refreshSession() {
+async function refreshSession(options = {}) {
   if (!state.auth) return;
-  const result = await state.auth.getSession();
-  state.session = result.user ? result : null;
-  state.authUserId = result.user?.id ?? result.session?.userId ?? result.session?.user?.id ?? null;
-  state.neonError = null;
+  const attempts = options.retry ? 4 : 1;
+  const retryDelayMs = options.retry ? 250 : 0;
+  let result = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    result = await state.auth.getSession();
+    if (result?.session || result?.user) {
+      break;
+    }
+    if (attempt < attempts - 1) {
+      await delay(retryDelayMs * (attempt + 1));
+    }
+  }
+
+  state.session = result?.session || result?.user ? result : null;
+  state.authUserId = result?.user?.id ?? result?.session?.userId ?? result?.session?.user?.id ?? null;
+  const authError = result?.error ? (result.error.message ?? String(result.error)) : null;
+  state.neonError = state.session ? null : authError;
   if (state.authUserId) {
     const identity = extractIdentityClaims(result);
     const profile = {
@@ -1197,6 +1215,12 @@ function renderSignIn() {
           <p>
             I use SocialX to keep my dummy accounts and forgotten logins organized so I can find them fast.
           </p>
+          ${state.neonError ? `
+            <div class="note-box" style="margin: 0 0 16px;">
+              <strong>Neon auth issue</strong><br />
+              ${escapeHtml(state.neonError)}
+            </div>
+          ` : ""}
           <button class="google-button" type="button" data-action="sign-in-google" aria-label="Continue with Google">
             <span class="google-icon" aria-hidden="true">
               <svg viewBox="0 0 48 48" width="20" height="20" role="img" focusable="false">
@@ -1998,7 +2022,7 @@ function bindGlobalEvents() {
         break;
       case "retry-neon":
         state.neonError = null;
-        await refreshSession();
+        await refreshSession({ retry: true });
         render();
         break;
       case "close-modal":
