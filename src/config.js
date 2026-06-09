@@ -13,5 +13,12 @@ export const config = {
 
 export function getAppOrigin() {
   const pathname = location.pathname.replace(/index\.html?$/i, "");
-  return `${location.origin}${pathname}`;
+  const currentOrigin = location.origin;
+  const githubPagesOrigin = config.githubPagesOrigin.replace(/\/$/, "");
+
+  if (currentOrigin === githubPagesOrigin) {
+    return `${githubPagesOrigin}/socialx/`;
+  }
+
+  return `${currentOrigin}${pathname}`;
 }
