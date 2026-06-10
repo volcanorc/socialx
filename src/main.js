@@ -27,6 +27,7 @@ const state = {
   authReady: false,
   auth: null,
   session: null,
+  signedInIdentity: null,
   authUserId: null,
   ownerId: null,
   neonError: null,
@@ -70,25 +71,62 @@ function getProfileImageUrl(user) {
   return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
 }
 
+function firstNonEmptyText(...values) {
+  for (const value of values.flat(Infinity)) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return "";
+}
+
+function collectIdentitySources(result = {}) {
+  const user = result.user ?? {};
+  const session = result.session ?? {};
+  const raw = result.raw ?? {};
+  const sessionUser = session.user ?? {};
+  const rawUser = raw.user ?? raw.session?.user ?? {};
+  const rawSession = raw.session ?? {};
+  const baseSources = [user, sessionUser, session, rawUser, rawSession, raw];
+  const metadataSources = baseSources.flatMap((source) => [
+    source?.user_metadata,
+    source?.app_metadata,
+    source?.identity_data,
+    source?.profile,
+    source?.profileData
+  ]);
+  const identitySources = baseSources.flatMap((source) => Array.isArray(source?.identities) ? source.identities : []);
+  const nestedIdentitySources = identitySources.flatMap((source) => [
+    source,
+    source?.identity_data,
+    source?.user_metadata,
+    source?.profile,
+    source?.profileData
+  ]);
+  return [...baseSources, ...metadataSources, ...nestedIdentitySources].filter(
+    (source) => source && typeof source === "object"
+  );
+}
+
 function getSignedInIdentity() {
+  const signedInIdentity = state.signedInIdentity ?? {};
   const ownerProfile = currentOwnerState()?.profile ?? {};
   return {
     name:
-      state.session?.user?.name ??
-      state.identityDebug?.displayName ??
+      signedInIdentity.displayName ??
+      signedInIdentity.name ??
       ownerProfile.displayName ??
       "",
     email:
-      state.session?.user?.email ??
-      state.identityDebug?.email ??
-      state.identityDebug?.googleEmail ??
+      signedInIdentity.email ??
+      signedInIdentity.googleEmail ??
       ownerProfile.googleEmail ??
       ownerProfile.email ??
       "Signed in",
     image:
-      state.session?.user?.image ??
-      state.session?.user?.avatarUrl ??
-      state.identityDebug?.avatarUrl ??
+      signedInIdentity.avatarUrl ??
+      signedInIdentity.image ??
       ownerProfile.avatarUrl ??
       ""
   };
@@ -118,6 +156,7 @@ function extractIdentityClaims(result = {}) {
   const sessionUser = session.user ?? {};
   const rawUser = raw.user ?? raw.session?.user ?? {};
   const rawSession = raw.session ?? {};
+  const sources = collectIdentitySources(result);
   const knownValues = [
     user.sub,
     user.subject,
@@ -136,17 +175,49 @@ function extractIdentityClaims(result = {}) {
     rawSession.sub,
     rawSession.subject
   ].filter(Boolean);
+  const displayName = firstNonEmptyText(
+    ...sources.map((source) => source.name),
+    ...sources.map((source) => source.displayName),
+    ...sources.map((source) => source.display_name),
+    ...sources.map((source) => source.full_name),
+    ...sources.map((source) => {
+      const given = typeof source.given_name === "string" ? source.given_name.trim() : "";
+      const family = typeof source.family_name === "string" ? source.family_name.trim() : "";
+      return [given, family].filter(Boolean).join(" ").trim();
+    })
+  );
+  const email = firstNonEmptyText(
+    ...sources.map((source) => source.email),
+    ...sources.map((source) => source.email_address),
+    ...sources.map((source) => source.mail),
+    ...sources.map((source) => source.preferred_username)
+  );
+  const avatarUrl = firstNonEmptyText(
+    ...sources.map((source) => source.image),
+    ...sources.map((source) => source.avatarUrl),
+    ...sources.map((source) => source.avatar_url),
+    ...sources.map((source) => source.picture),
+    ...sources.map((source) => source.picture_url),
+    ...sources.map((source) => source.profile_picture),
+    ...sources.map((source) => source.profile_image_url),
+    ...sources.map((source) => source.photoURL)
+  );
   const rawUserKeys = Object.keys(user ?? {});
   const rawSessionUserKeys = Object.keys(sessionUser ?? {});
   const rawResponseKeys = Object.keys(raw ?? {});
   return {
     authUserId: user.id ?? session.userId ?? sessionUser.id ?? null,
     sessionUserId: session.userId ?? sessionUser.id ?? null,
-    email: user.email ?? sessionUser.email ?? "",
-    displayName: user.name ?? user.displayName ?? sessionUser.name ?? sessionUser.displayName ?? "",
-    avatarUrl: user.image ?? user.avatarUrl ?? sessionUser.image ?? sessionUser.avatarUrl ?? "",
+    email,
+    googleEmail: email,
+    displayName,
+    avatarUrl,
     googleSubject: knownValues[0] ?? "",
-    provider: user.provider ?? session.provider ?? sessionUser.provider ?? "",
+    provider: firstNonEmptyText(
+      ...sources.map((source) => source.provider),
+      ...sources.map((source) => source.provider_id),
+      ...sources.map((source) => source.iss)
+    ),
     rawUserKeys,
     rawSessionUserKeys,
     rawResponseKeys
@@ -218,6 +289,7 @@ function renderStatusBadge(status = "active") {
   const icon = mapped === "active" ? "Ã°Å¸Å¸Â¢" : mapped === "inactive" ? "Ã°Å¸Å¸Â¡" : "Ã¢Å¡Â«";
   const label = mapped === "active" ? "Active" : mapped === "inactive" ? "Inactive" : "Archived";
   return `<span class="badge ${tone} badge-status">${icon} ${escapeHtml(label)}</span>`;
+  {
   const normalized = normalizeText(status);
   const tone = normalized === "active"
     ? "good"
@@ -251,6 +323,7 @@ function renderStatusBadge(status = "active") {
             ? "Archive"
             : "Pending Close";
   return `<span class="badge ${tone} badge-status">${icon} ${escapeHtml(label)}</span>`;
+  }
 }
 
 function renderStatusDot(status = "active") {
@@ -258,6 +331,7 @@ function renderStatusDot(status = "active") {
   const tone = mapped === "active" ? "good" : mapped === "inactive" ? "warn" : "dark";
   const label = mapped === "active" ? "Active" : mapped === "inactive" ? "Inactive" : "Archived";
   return `<span class="status-dot status-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+  {
   const normalized = normalizeText(status);
   const tone =
     normalized === "active"
@@ -280,6 +354,7 @@ function renderStatusDot(status = "active") {
             ? "Archive"
             : "Pending Close";
   return `<span class="status-dot status-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+  }
 }
 
 function renderFilterStatusDot(status = "") {
@@ -289,6 +364,7 @@ function renderFilterStatusDot(status = "") {
   }
   const tone = normalizeStatusValue(status) === "active" ? "good" : normalizeStatusValue(status) === "inactive" ? "warn" : "dark";
   return `<span class="filter-dot filter-${tone}" aria-hidden="true"></span>`;
+  {
   const normalized = normalizeText(status);
   if (!normalized || normalized === "all") {
     return `<span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>`;
@@ -304,6 +380,7 @@ function renderFilterStatusDot(status = "") {
             ? "dark"
             : "pending";
   return `<span class="filter-dot filter-${tone}" aria-hidden="true"></span>`;
+  }
 }
 
 function renderFilterMenuItemIcon(platform = "") {
@@ -939,6 +1016,16 @@ async function refreshSession(options = {}) {
         googleSubject: resolved.googleSubject ?? profile.googleSubject,
         canonicalKey: resolved.canonicalKey ?? profile.canonicalKey
       };
+      state.signedInIdentity = {
+        authUserId: state.authUserId,
+        sessionUserId: identity.sessionUserId,
+        displayName: profile.displayName,
+        name: profile.displayName,
+        email: profile.email,
+        googleEmail: profile.googleEmail,
+        avatarUrl: profile.avatarUrl,
+        image: profile.avatarUrl
+      };
       await store.initialize(state.ownerId, profile);
       if (!state.ownerId) return;
       render();
@@ -956,11 +1043,22 @@ async function refreshSession(options = {}) {
         rawSessionUserKeys: identity.rawSessionUserKeys ?? [],
         rawResponseKeys: identity.rawResponseKeys ?? []
       };
+      state.signedInIdentity = {
+        authUserId: state.authUserId,
+        sessionUserId: identity.sessionUserId,
+        displayName: profile.displayName,
+        name: profile.displayName,
+        email: profile.email,
+        googleEmail: profile.googleEmail,
+        avatarUrl: profile.avatarUrl,
+        image: profile.avatarUrl
+      };
       state.ownerId = null;
       state.selectedAccountId = null;
       console.warn("Failed to hydrate Neon store.", error);
     }
   } else {
+    state.signedInIdentity = null;
     state.ownerId = null;
     state.identityDebug = null;
     state.neonError = null;
@@ -1506,11 +1604,8 @@ function renderAccountList(owner) {
   if (!accounts.length) {
     return `
       <div class="empty-state">
-        <h3>No accounts match your current filters.</h3>
-        <p>
-          Try clearing a filter or add a new account. SocialX keeps linked accounts, custom fields, and archive-first
-          organization simple to browse.
-        </p>
+        <h3>No matching accounts</h3>
+        <p>Adjust your filters or add a new account to see more results.</p>
         <button class="primary-button" type="button" data-action="open-create">Add account</button>
       </div>
     `;
@@ -1539,7 +1634,10 @@ function renderAccountsToolbar(owner) {
           >
             <span class="bulk-mode-toggle-box">${state.bulkSelectMode ? "✓" : ""}</span>
           </button>
-          <div class="section-title">Accounts</div>
+          ${state.bulkSelectMode
+            ? `<button class="bulk-cancel-button" type="button" data-action="cancel-bulk-mode">Cancel</button>`
+            : `<button class="bulk-mode-label" type="button" data-action="toggle-bulk-mode">Edit</button>`
+          }
           ${state.bulkSelectMode ? `<span class="selection-count">${escapeHtml(String(selectedCount))} selected</span>` : ""}
         </div>
         <div class="meta-line">
@@ -2123,6 +2221,7 @@ function bindGlobalEvents() {
       case "sign-out":
         await state.auth?.signOut?.();
         state.session = null;
+        state.signedInIdentity = null;
         state.authUserId = null;
         state.ownerId = null;
         state.neonError = null;
@@ -2237,6 +2336,10 @@ function bindGlobalEvents() {
         break;
       case "toggle-bulk-mode":
         toggleBulkSelectionMode();
+        render();
+        break;
+      case "cancel-bulk-mode":
+        toggleBulkSelectionMode(false);
         render();
         break;
       case "bulk-archive": {

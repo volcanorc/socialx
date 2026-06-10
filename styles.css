@@ -862,6 +862,30 @@ a {
   flex-wrap: wrap;
 }
 
+.bulk-mode-label {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+.bulk-mode-label:hover {
+  color: var(--accent);
+}
+
+.bulk-mode-label:focus-visible {
+  outline: none;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 .bulk-mode-toggle,
 .bulk-select-checkbox {
   width: 22px;
@@ -907,6 +931,29 @@ a {
   font-size: 0.82rem;
   line-height: 1;
   font-weight: 800;
+}
+
+.bulk-cancel-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #d96464;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.18s ease, opacity 0.18s ease;
+}
+
+.bulk-cancel-button:hover {
+  color: #bf4b4b;
+}
+
+.bulk-cancel-button:focus-visible {
+  outline: none;
+  color: #bf4b4b;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
 }
 
 .selection-count {
