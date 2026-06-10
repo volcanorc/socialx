@@ -884,9 +884,9 @@ async function refreshSession(options = {}) {
       if (!state.ownerId) return;
       const current = store.getOwner(state.ownerId);
       if (!current.profile.displayName) {
-        store.updateProfile(state.ownerId, profile);
+        store.updateProfile(state.ownerId, profile, { persist: false });
       }
-      store.setSettings(state.ownerId, { lastSeenAt: nowIso() });
+      store.setSettings(state.ownerId, { lastSeenAt: nowIso() }, { persist: false });
       render();
     } catch (error) {
       state.neonError = error?.message ?? String(error);
@@ -2156,7 +2156,7 @@ function bindGlobalEvents() {
         const passphrase = modal?.querySelector('input[name="vaultPassphrase"]')?.value ?? "";
         const showArchived = modal?.querySelector('select[name="showArchived"]')?.value === "true";
         savePassphrase(passphrase);
-        store.setSettings(state.ownerId, { showArchived, lastSeenAt: nowIso() });
+        store.setSettings(state.ownerId, { showArchived });
         setToast("Settings saved", "Vault preferences were updated.", "success");
         closeModal();
         break;

@@ -13,6 +13,21 @@ const clone = globalThis.structuredClone
   ? (value) => globalThis.structuredClone(value)
   : (value) => JSON.parse(JSON.stringify(value));
 
+function createPendingState() {
+  return {
+    userDirty: false,
+    accountsUpsert: new Set(),
+    accountsDelete: new Set(),
+    relationshipsUpsert: new Set(),
+    relationshipsDelete: new Set(),
+    customFieldsUpsert: new Set(),
+    customFieldsDelete: new Set(),
+    customFieldValuesUpsert: new Set(),
+    customFieldValuesDelete: new Set(),
+    activityUpsert: new Set()
+  };
+}
+
 function normalizeIdentityKey(value = "") {
   return normalizeText(value).toLowerCase();
 }
@@ -239,6 +254,10 @@ function rowToRelationship(row) {
   };
 }
 
+function relationshipById(owner, id) {
+  return owner.accountRelationships.find((relationship) => relationship.id === id) ?? null;
+}
+
 function relationshipToRow(ownerId, relationship) {
   return {
     id: relationship.id,
@@ -264,6 +283,10 @@ function rowToActivity(row) {
     diff: row.diff ?? {},
     createdAt: row.created_at ?? nowIso()
   };
+}
+
+function customFieldValueById(owner, id) {
+  return owner.customFieldValues.find((value) => value.id === id) ?? null;
 }
 
 function activityToRow(ownerId, entry) {
@@ -319,7 +342,7 @@ function rewriteSearchIndex(owner) {
 }
 
 function createActivity(owner, entry) {
-  owner.activityLog.unshift({
+  const activity = {
     id: entry.id ?? uid("log"),
     ownerId: entry.ownerId,
     actorId: entry.actorId,
@@ -329,7 +352,9 @@ function createActivity(owner, entry) {
     summary: entry.summary,
     diff: entry.diff ?? {},
     createdAt: entry.createdAt ?? nowIso()
-  });
+  };
+  owner.activityLog.unshift(activity);
+  return activity;
 }
 
 function customFieldById(owner, id) {
@@ -524,12 +549,171 @@ export function createStore() {
   const dirtyOwners = new Set();
   const flushTimers = new Map();
   const flushPromises = new Map();
+  const pendingSync = new Map();
 
   function getOwnerState(ownerId) {
     if (!owners.has(ownerId)) {
       owners.set(ownerId, createEmptyOwnerState(ownerId));
     }
     return owners.get(ownerId);
+  }
+
+  function getPendingState(ownerId) {
+    if (!pendingSync.has(ownerId)) {
+      pendingSync.set(ownerId, createPendingState());
+    }
+    return pendingSync.get(ownerId);
+  }
+
+  function resetPendingState(ownerId) {
+    const pending = createPendingState();
+    pendingSync.set(ownerId, pending);
+    return pending;
+  }
+
+  function clearPendingState(ownerId) {
+    pendingSync.delete(ownerId);
+  }
+
+  function markUserDirty(ownerId) {
+    getPendingState(ownerId).userDirty = true;
+  }
+
+  function markUpsert(ownerId, upsertKey, deleteKey, id) {
+    if (!id) return;
+    const pending = getPendingState(ownerId);
+    pending[upsertKey].add(id);
+    if (deleteKey) {
+      pending[deleteKey].delete(id);
+    }
+  }
+
+  function markDelete(ownerId, deleteKey, upsertKey, id) {
+    if (!id) return;
+    const pending = getPendingState(ownerId);
+    pending[deleteKey].add(id);
+    if (upsertKey) {
+      pending[upsertKey].delete(id);
+    }
+  }
+
+  function markActivityUpsert(ownerId, id) {
+    markUpsert(ownerId, "activityUpsert", null, id);
+  }
+
+  function snapshotPendingState(ownerId) {
+    const pending = getPendingState(ownerId);
+    return {
+      userDirty: pending.userDirty,
+      accountsUpsert: [...pending.accountsUpsert],
+      accountsDelete: [...pending.accountsDelete],
+      relationshipsUpsert: [...pending.relationshipsUpsert],
+      relationshipsDelete: [...pending.relationshipsDelete],
+      customFieldsUpsert: [...pending.customFieldsUpsert],
+      customFieldsDelete: [...pending.customFieldsDelete],
+      customFieldValuesUpsert: [...pending.customFieldValuesUpsert],
+      customFieldValuesDelete: [...pending.customFieldValuesDelete],
+      activityUpsert: [...pending.activityUpsert]
+    };
+  }
+
+  function clearAppliedPendingState(ownerId, applied) {
+    const pending = getPendingState(ownerId);
+    if (applied.userDirty) {
+      pending.userDirty = false;
+    }
+    for (const id of applied.accountsUpsert) pending.accountsUpsert.delete(id);
+    for (const id of applied.accountsDelete) pending.accountsDelete.delete(id);
+    for (const id of applied.relationshipsUpsert) pending.relationshipsUpsert.delete(id);
+    for (const id of applied.relationshipsDelete) pending.relationshipsDelete.delete(id);
+    for (const id of applied.customFieldsUpsert) pending.customFieldsUpsert.delete(id);
+    for (const id of applied.customFieldsDelete) pending.customFieldsDelete.delete(id);
+    for (const id of applied.customFieldValuesUpsert) pending.customFieldValuesUpsert.delete(id);
+    for (const id of applied.customFieldValuesDelete) pending.customFieldValuesDelete.delete(id);
+    for (const id of applied.activityUpsert) pending.activityUpsert.delete(id);
+  }
+
+  function hasPendingChanges(pending) {
+    return pending.userDirty ||
+      pending.accountsUpsert.length ||
+      pending.accountsDelete.length ||
+      pending.relationshipsUpsert.length ||
+      pending.relationshipsDelete.length ||
+      pending.customFieldsUpsert.length ||
+      pending.customFieldsDelete.length ||
+      pending.customFieldValuesUpsert.length ||
+      pending.customFieldValuesDelete.length ||
+      pending.activityUpsert.length;
+  }
+
+  function markRelationshipDiff(ownerId, beforeIds, owner) {
+    const afterIds = new Set(owner.accountRelationships.map((relationship) => relationship.id).filter(Boolean));
+    for (const id of beforeIds) {
+      if (!afterIds.has(id)) {
+        markDelete(ownerId, "relationshipsDelete", "relationshipsUpsert", id);
+      }
+    }
+    for (const id of afterIds) {
+      if (!beforeIds.has(id)) {
+        markUpsert(ownerId, "relationshipsUpsert", "relationshipsDelete", id);
+      }
+    }
+  }
+
+  function markImportDiff(ownerId, previousOwner, nextOwner) {
+    markUserDirty(ownerId);
+
+    const previousAccounts = new Set(previousOwner.accounts.map((account) => account.id));
+    for (const account of nextOwner.accounts) {
+      markUpsert(ownerId, "accountsUpsert", "accountsDelete", account.id);
+      previousAccounts.delete(account.id);
+    }
+    for (const id of previousAccounts) {
+      markDelete(ownerId, "accountsDelete", "accountsUpsert", id);
+    }
+
+    const previousRelationships = new Set(previousOwner.accountRelationships.map((relationship) => relationship.id));
+    for (const relationship of nextOwner.accountRelationships) {
+      markUpsert(ownerId, "relationshipsUpsert", "relationshipsDelete", relationship.id);
+      previousRelationships.delete(relationship.id);
+    }
+    for (const id of previousRelationships) {
+      markDelete(ownerId, "relationshipsDelete", "relationshipsUpsert", id);
+    }
+
+    const previousFields = new Set(previousOwner.customFields.map((field) => field.id));
+    for (const field of nextOwner.customFields) {
+      markUpsert(ownerId, "customFieldsUpsert", "customFieldsDelete", field.id);
+      previousFields.delete(field.id);
+    }
+    for (const id of previousFields) {
+      markDelete(ownerId, "customFieldsDelete", "customFieldsUpsert", id);
+    }
+
+    const previousValues = new Set(previousOwner.customFieldValues.map((value) => value.id));
+    for (const value of nextOwner.customFieldValues) {
+      markUpsert(ownerId, "customFieldValuesUpsert", "customFieldValuesDelete", value.id);
+      previousValues.delete(value.id);
+    }
+    for (const id of previousValues) {
+      markDelete(ownerId, "customFieldValuesDelete", "customFieldValuesUpsert", id);
+    }
+
+    for (const activity of nextOwner.activityLog) {
+      markActivityUpsert(ownerId, activity.id);
+    }
+  }
+
+  function collectRows(owner, ids, getter, mapper, ownerId) {
+    return ids
+      .map((id) => getter(owner, id))
+      .filter(Boolean)
+      .map((entry) => mapper(ownerId, entry));
+  }
+
+  async function deleteRowsByIds(client, table, ids) {
+    if (!ids.length) return;
+    await exec(client.from(table).delete().in("id", ids));
   }
 
   async function loadRemoteOwner(ownerId) {
@@ -605,44 +789,44 @@ export function createStore() {
       }
 
       const snapshot = clone(owner);
+      const pending = snapshotPendingState(ownerId);
+      if (!hasPendingChanges(pending)) {
+        dirtyOwners.delete(ownerId);
+        return true;
+      }
       try {
-        await exec(
-          client.from("activity_log").delete().eq("owner_auth_user_id", ownerId)
-        );
-        await exec(client.from("custom_field_values").delete().eq("owner_auth_user_id", ownerId));
-        await exec(client.from("custom_fields").delete().eq("owner_auth_user_id", ownerId));
-        await exec(client.from("account_relationships").delete().eq("owner_auth_user_id", ownerId));
-        await exec(client.from("accounts").delete().eq("owner_auth_user_id", ownerId));
-        await exec(client.from("users").upsert(userToRow(ownerId, snapshot), { onConflict: "auth_user_id" }));
-
-        if (snapshot.accounts.length) {
-          await exec(client.from("accounts").insert(snapshot.accounts.map((account) => accountToRow(ownerId, account))));
+        if (pending.userDirty) {
+          await exec(client.from("users").upsert(userToRow(ownerId, snapshot), { onConflict: "auth_user_id" }));
         }
 
-        if (snapshot.customFields.length) {
-          await exec(
-            client.from("custom_fields").insert(snapshot.customFields.map((field) => customFieldToRow(ownerId, field)))
-          );
+        await deleteRowsByIds(client, "custom_field_values", pending.customFieldValuesDelete);
+        await deleteRowsByIds(client, "account_relationships", pending.relationshipsDelete);
+        await deleteRowsByIds(client, "accounts", pending.accountsDelete);
+        await deleteRowsByIds(client, "custom_fields", pending.customFieldsDelete);
+
+        const accountRows = collectRows(snapshot, pending.accountsUpsert, accountById, accountToRow, ownerId);
+        if (accountRows.length) {
+          await exec(client.from("accounts").upsert(accountRows, { onConflict: "id" }));
         }
 
-        if (snapshot.accountRelationships.length) {
-          await exec(
-            client.from("account_relationships").insert(
-              snapshot.accountRelationships.map((relationship) => relationshipToRow(ownerId, relationship))
-            )
-          );
+        const customFieldRows = collectRows(snapshot, pending.customFieldsUpsert, customFieldById, customFieldToRow, ownerId);
+        if (customFieldRows.length) {
+          await exec(client.from("custom_fields").upsert(customFieldRows, { onConflict: "id" }));
         }
 
-        if (snapshot.customFieldValues.length) {
-          await exec(
-            client.from("custom_field_values").insert(
-              snapshot.customFieldValues.map((value) => customFieldValueToRow(ownerId, value))
-            )
-          );
+        const relationshipRows = collectRows(snapshot, pending.relationshipsUpsert, relationshipById, relationshipToRow, ownerId);
+        if (relationshipRows.length) {
+          await exec(client.from("account_relationships").upsert(relationshipRows, { onConflict: "id" }));
         }
 
-        if (snapshot.activityLog.length) {
-          await exec(client.from("activity_log").insert(snapshot.activityLog.map((entry) => activityToRow(ownerId, entry))));
+        const customFieldValueRows = collectRows(snapshot, pending.customFieldValuesUpsert, customFieldValueById, customFieldValueToRow, ownerId);
+        if (customFieldValueRows.length) {
+          await exec(client.from("custom_field_values").upsert(customFieldValueRows, { onConflict: "id" }));
+        }
+
+        const activityRows = collectRows(snapshot, pending.activityUpsert, activityById, activityToRow, ownerId);
+        if (activityRows.length) {
+          await exec(client.from("activity_log").upsert(activityRows, { onConflict: "id" }));
         }
 
         owner.sync = {
@@ -651,6 +835,7 @@ export function createStore() {
           lastSyncError: null,
           source: "neon"
         };
+        clearAppliedPendingState(ownerId, pending);
         dirtyOwners.delete(ownerId);
         return true;
       } catch (error) {
@@ -686,9 +871,7 @@ export function createStore() {
   }
 
   function touchOwner(ownerId) {
-    const owner = getOwnerState(ownerId);
-    owner.settings.lastSeenAt = nowIso();
-    return owner;
+    return getOwnerState(ownerId);
   }
 
   return {
@@ -700,6 +883,7 @@ export function createStore() {
       flushPromises.clear();
       dirtyOwners.clear();
       owners.clear();
+      pendingSync.clear();
     },
 
     async resolveOwnerIdentity(identity = {}) {
@@ -760,6 +944,7 @@ export function createStore() {
         lastSyncError: null
       };
       owners.set(ownerId, owner);
+      resetPendingState(ownerId);
       return clone(owner);
     },
 
@@ -893,7 +1078,7 @@ export function createStore() {
 
       syncAnchorLink(owner, account.id, draft.linkMode, draft.anchorAccountId);
 
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "account.create",
@@ -906,6 +1091,17 @@ export function createStore() {
       });
 
       rewriteSearchIndex(owner);
+      markUpsert(ownerId, "accountsUpsert", "accountsDelete", account.id);
+      for (const field of owner.customFields) {
+        if (field.ownerId === ownerId && (draft.customFields ?? []).some((customField) => customField.fieldId === field.id || (!customField.fieldId && customField.name?.trim() === field.name))) {
+          markUpsert(ownerId, "customFieldsUpsert", "customFieldsDelete", field.id);
+        }
+      }
+      for (const value of owner.customFieldValues.filter((entry) => entry.accountId === account.id)) {
+        markUpsert(ownerId, "customFieldValuesUpsert", "customFieldValuesDelete", value.id);
+      }
+      markRelationshipDiff(ownerId, new Set(), owner);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return clone(account);
     },
@@ -918,6 +1114,10 @@ export function createStore() {
       }
       const anchorAccount = draft.linkMode === "linkedGoogle" ? accountById(owner, draft.anchorAccountId) : null;
       const before = clone(account);
+      const previousRelationshipIds = new Set(owner.accountRelationships.map((relationship) => relationship.id));
+      const previousValueIds = owner.customFieldValues
+        .filter((value) => value.accountId === accountId)
+        .map((value) => value.id);
       account.platform = draft.platform?.trim() || account.platform;
       account.accountType = draft.accountType?.trim() || account.accountType;
       account.label = deriveAccountLabel(draft, account.label);
@@ -932,6 +1132,9 @@ export function createStore() {
       account.updatedAt = nowIso();
 
       owner.customFieldValues = owner.customFieldValues.filter((value) => value.accountId !== accountId);
+      for (const valueId of previousValueIds) {
+        markDelete(ownerId, "customFieldValuesDelete", "customFieldValuesUpsert", valueId);
+      }
       for (const customField of draft.customFields ?? []) {
         let field = customFieldById(owner, customField.fieldId);
         if (!field) {
@@ -946,15 +1149,17 @@ export function createStore() {
             updatedAt: nowIso()
           };
           owner.customFields.unshift(field);
+          markUpsert(ownerId, "customFieldsUpsert", "customFieldsDelete", field.id);
         } else {
           field.name = customField.name?.trim() || field.name;
           field.valueType = customField.valueType || field.valueType;
           field.visibility = customField.visibility || field.visibility;
           field.searchable = Boolean(customField.searchable ?? field.searchable);
           field.updatedAt = nowIso();
+          markUpsert(ownerId, "customFieldsUpsert", "customFieldsDelete", field.id);
         }
 
-        owner.customFieldValues.unshift({
+        const fieldValue = {
           id: uid("fieldval"),
           ownerId,
           accountId,
@@ -964,12 +1169,14 @@ export function createStore() {
           encryptedValue: customField.encryptedValue ?? null,
           createdAt: nowIso(),
           updatedAt: nowIso()
-        });
+        };
+        owner.customFieldValues.unshift(fieldValue);
+        markUpsert(ownerId, "customFieldValuesUpsert", "customFieldValuesDelete", fieldValue.id);
       }
 
       syncAnchorLink(owner, accountId, draft.linkMode, draft.anchorAccountId);
 
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "account.update",
@@ -983,6 +1190,9 @@ export function createStore() {
       });
 
       rewriteSearchIndex(owner);
+      markUpsert(ownerId, "accountsUpsert", "accountsDelete", account.id);
+      markRelationshipDiff(ownerId, previousRelationshipIds, owner);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return clone(account);
     },
@@ -995,7 +1205,7 @@ export function createStore() {
       account.archived = Boolean(archived);
       account.status = archived ? "archived" : account.status === "archived" ? "active" : account.status;
       account.updatedAt = nowIso();
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: archived ? "account.archive" : "account.restore",
@@ -1005,6 +1215,8 @@ export function createStore() {
         diff: { before, after: clone(account) }
       });
       rewriteSearchIndex(owner);
+      markUpsert(ownerId, "accountsUpsert", "accountsDelete", account.id);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return clone(account);
     },
@@ -1013,12 +1225,18 @@ export function createStore() {
       const owner = touchOwner(ownerId);
       const account = accountById(owner, accountId);
       if (!account) throw new Error("Account not found");
+      const relationshipIds = owner.accountRelationships
+        .filter((relation) => relation.parentAccountId === accountId || relation.childAccountId === accountId)
+        .map((relation) => relation.id);
+      const customFieldValueIds = owner.customFieldValues
+        .filter((value) => value.accountId === accountId)
+        .map((value) => value.id);
       owner.accounts = owner.accounts.filter((entry) => entry.id !== accountId);
       owner.accountRelationships = owner.accountRelationships.filter(
         (relation) => relation.parentAccountId !== accountId && relation.childAccountId !== accountId
       );
       owner.customFieldValues = owner.customFieldValues.filter((value) => value.accountId !== accountId);
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "account.delete",
@@ -1028,6 +1246,14 @@ export function createStore() {
         diff: { before: clone(account) }
       });
       rewriteSearchIndex(owner);
+      markDelete(ownerId, "accountsDelete", "accountsUpsert", accountId);
+      for (const relationshipId of relationshipIds) {
+        markDelete(ownerId, "relationshipsDelete", "relationshipsUpsert", relationshipId);
+      }
+      for (const valueId of customFieldValueIds) {
+        markDelete(ownerId, "customFieldValuesDelete", "customFieldValuesUpsert", valueId);
+      }
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return true;
     },
@@ -1055,7 +1281,7 @@ export function createStore() {
         field.updatedAt = nowIso();
       }
 
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "field.upsert",
@@ -1066,6 +1292,8 @@ export function createStore() {
       });
 
       rewriteSearchIndex(owner);
+      markUpsert(ownerId, "customFieldsUpsert", "customFieldsDelete", field.id);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return clone(field);
     },
@@ -1077,13 +1305,15 @@ export function createStore() {
         field = this.upsertCustomField(ownerId, actorId, fieldDraft);
       }
       const existing = owner.customFieldValues.find((value) => value.accountId === accountId && value.fieldId === field.id);
+      let activity = null;
       if (existing) {
         existing.valueText = fieldDraft.valueText?.trim() || "";
         existing.valueJson = fieldDraft.valueJson ?? null;
         existing.encryptedValue = fieldDraft.encryptedValue ?? null;
         existing.updatedAt = nowIso();
+        markUpsert(ownerId, "customFieldValuesUpsert", "customFieldValuesDelete", existing.id);
       } else {
-        owner.customFieldValues.unshift({
+        const createdValue = {
           id: uid("fieldval"),
           ownerId,
           accountId,
@@ -1093,10 +1323,12 @@ export function createStore() {
           encryptedValue: fieldDraft.encryptedValue ?? null,
           createdAt: nowIso(),
           updatedAt: nowIso()
-        });
+        };
+        owner.customFieldValues.unshift(createdValue);
+        markUpsert(ownerId, "customFieldValuesUpsert", "customFieldValuesDelete", createdValue.id);
       }
 
-      createActivity(owner, {
+      activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "field.value",
@@ -1107,16 +1339,20 @@ export function createStore() {
       });
 
       rewriteSearchIndex(owner);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return true;
     },
 
     deleteCustomFieldValue(ownerId, actorId, accountId, fieldId) {
       const owner = touchOwner(ownerId);
+      const deletedIds = owner.customFieldValues
+        .filter((value) => value.accountId === accountId && value.fieldId === fieldId)
+        .map((value) => value.id);
       owner.customFieldValues = owner.customFieldValues.filter(
         (value) => !(value.accountId === accountId && value.fieldId === fieldId)
       );
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "field.value.delete",
@@ -1126,6 +1362,10 @@ export function createStore() {
         diff: {}
       });
       rewriteSearchIndex(owner);
+      for (const valueId of deletedIds) {
+        markDelete(ownerId, "customFieldValuesDelete", "customFieldValuesUpsert", valueId);
+      }
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return true;
     },
@@ -1143,7 +1383,7 @@ export function createStore() {
         updatedAt: nowIso()
       };
       owner.accountRelationships.unshift(relationship);
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "relationship.create",
@@ -1153,6 +1393,8 @@ export function createStore() {
         diff: { after: clone(relationship) }
       });
       rewriteSearchIndex(owner);
+      markUpsert(ownerId, "relationshipsUpsert", "relationshipsDelete", relationship.id);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return clone(relationship);
     },
@@ -1160,7 +1402,7 @@ export function createStore() {
     deleteRelationship(ownerId, actorId, relationshipId) {
       const owner = touchOwner(ownerId);
       owner.accountRelationships = owner.accountRelationships.filter((relation) => relation.id !== relationshipId);
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "relationship.delete",
@@ -1170,6 +1412,8 @@ export function createStore() {
         diff: {}
       });
       rewriteSearchIndex(owner);
+      markDelete(ownerId, "relationshipsDelete", "relationshipsUpsert", relationshipId);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return true;
     },
@@ -1238,9 +1482,10 @@ export function createStore() {
     },
 
     importOwner(ownerId, snapshot, actorId) {
+      const previousOwner = owners.get(ownerId) ?? createEmptyOwnerState(ownerId);
       const owner = normalizeOwnerSnapshot(ownerId, snapshot);
       owners.set(ownerId, owner);
-      createActivity(owner, {
+      const activity = createActivity(owner, {
         ownerId,
         actorId,
         action: "import.complete",
@@ -1250,22 +1495,27 @@ export function createStore() {
         diff: {}
       });
       rewriteSearchIndex(owner);
+      markImportDiff(ownerId, previousOwner, owner);
+      markActivityUpsert(ownerId, activity.id);
       schedulePersist(ownerId);
       return true;
     },
 
-    updateProfile(ownerId, patch) {
+    updateProfile(ownerId, patch, options = {}) {
       const owner = touchOwner(ownerId);
       owner.profile = {
         ...owner.profile,
         ...patch,
         ownerId
       };
-      schedulePersist(ownerId);
+      if (options.persist !== false) {
+        markUserDirty(ownerId);
+        schedulePersist(ownerId);
+      }
       return clone(owner.profile);
     },
 
-    setSettings(ownerId, patch) {
+    setSettings(ownerId, patch, options = {}) {
       const owner = touchOwner(ownerId);
       owner.settings = {
         ...owner.settings,
@@ -1274,7 +1524,10 @@ export function createStore() {
           ...patch
         })
       };
-      schedulePersist(ownerId);
+      if (options.persist !== false) {
+        markUserDirty(ownerId);
+        schedulePersist(ownerId);
+      }
       return clone(owner.settings);
     },
 
@@ -1291,6 +1544,7 @@ export function createStore() {
         ...owner.settings,
         customPlatforms
       });
+      markUserDirty(ownerId);
       schedulePersist(ownerId);
       return clone(owner.settings);
     },
