@@ -42,6 +42,8 @@ const state = {
     sort: "updated_desc"
   },
   selectedAccountId: null,
+  bulkSelectMode: false,
+  selectedAccountIds: [],
   modal: null,
   toast: null,
   duplicateWarnings: [],
@@ -66,6 +68,47 @@ function getInitials(text = "") {
 
 function getProfileImageUrl(user) {
   return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
+}
+
+function getSignedInIdentity() {
+  const ownerProfile = currentOwnerState()?.profile ?? {};
+  return {
+    name:
+      state.session?.user?.name ??
+      state.identityDebug?.displayName ??
+      ownerProfile.displayName ??
+      "",
+    email:
+      state.session?.user?.email ??
+      state.identityDebug?.email ??
+      state.identityDebug?.googleEmail ??
+      ownerProfile.googleEmail ??
+      ownerProfile.email ??
+      "Signed in",
+    image:
+      state.session?.user?.image ??
+      state.session?.user?.avatarUrl ??
+      state.identityDebug?.avatarUrl ??
+      ownerProfile.avatarUrl ??
+      ""
+  };
+}
+
+function getSignedInEmail() {
+  return getSignedInIdentity().email;
+}
+
+function normalizeStatusValue(status = "") {
+  const normalized = normalizeText(status);
+  if (normalized === "archived") return "archived";
+  if (normalized === "inactive" || normalized === "paused" || normalized === "locked" || normalized === "pending" || normalized === "closed") {
+    return "inactive";
+  }
+  return "active";
+}
+
+function isArchivedSelectionView() {
+  return normalizeText(state.filters.status) === "archived" || state.filters.archived === "archived";
 }
 
 function extractIdentityClaims(result = {}) {
@@ -170,6 +213,11 @@ function renderLinkModeToggle(mode = "separate") {
 }
 
 function renderStatusBadge(status = "active") {
+  const mapped = normalizeStatusValue(status);
+  const tone = mapped === "active" ? "good" : mapped === "inactive" ? "warn" : "dark";
+  const icon = mapped === "active" ? "Ã°Å¸Å¸Â¢" : mapped === "inactive" ? "Ã°Å¸Å¸Â¡" : "Ã¢Å¡Â«";
+  const label = mapped === "active" ? "Active" : mapped === "inactive" ? "Inactive" : "Archived";
+  return `<span class="badge ${tone} badge-status">${icon} ${escapeHtml(label)}</span>`;
   const normalized = normalizeText(status);
   const tone = normalized === "active"
     ? "good"
@@ -206,6 +254,10 @@ function renderStatusBadge(status = "active") {
 }
 
 function renderStatusDot(status = "active") {
+  const mapped = normalizeStatusValue(status);
+  const tone = mapped === "active" ? "good" : mapped === "inactive" ? "warn" : "dark";
+  const label = mapped === "active" ? "Active" : mapped === "inactive" ? "Inactive" : "Archived";
+  return `<span class="status-dot status-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
   const normalized = normalizeText(status);
   const tone =
     normalized === "active"
@@ -231,6 +283,12 @@ function renderStatusDot(status = "active") {
 }
 
 function renderFilterStatusDot(status = "") {
+  const mapped = normalizeText(status);
+  if (!mapped || mapped === "all") {
+    return `<span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>`;
+  }
+  const tone = normalizeStatusValue(status) === "active" ? "good" : normalizeStatusValue(status) === "inactive" ? "warn" : "dark";
+  return `<span class="filter-dot filter-${tone}" aria-hidden="true"></span>`;
   const normalized = normalizeText(status);
   if (!normalized || normalized === "all") {
     return `<span class="filter-dot filter-dot-neutral" aria-hidden="true"></span>`;
@@ -784,6 +842,7 @@ function openAccountEditor(accountId = null) {
     return;
   }
   state.selectedAccountId = null;
+  clearBulkSelection({ disableMode: true });
   navigate("#accounts/new");
 }
 
@@ -882,11 +941,6 @@ async function refreshSession(options = {}) {
       };
       await store.initialize(state.ownerId, profile);
       if (!state.ownerId) return;
-      const current = store.getOwner(state.ownerId);
-      if (!current.profile.displayName) {
-        store.updateProfile(state.ownerId, profile, { persist: false });
-      }
-      store.setSettings(state.ownerId, { lastSeenAt: nowIso() }, { persist: false });
       render();
     } catch (error) {
       state.neonError = error?.message ?? String(error);
@@ -918,6 +972,40 @@ async function refreshSession(options = {}) {
 function currentOwnerState() {
   if (!state.ownerId) return null;
   return store.getOwner(state.ownerId);
+}
+
+function clearBulkSelection({ disableMode = false } = {}) {
+  state.selectedAccountIds = [];
+  if (disableMode) {
+    state.bulkSelectMode = false;
+  }
+}
+
+function isAccountBulkSelected(accountId) {
+  return state.selectedAccountIds.includes(accountId);
+}
+
+function toggleBulkSelectionMode(force = null) {
+  const next = typeof force === "boolean" ? force : !state.bulkSelectMode;
+  state.bulkSelectMode = next;
+  if (!next) {
+    clearBulkSelection();
+  }
+}
+
+function toggleAccountBulkSelection(accountId) {
+  if (!accountId) return;
+  if (isAccountBulkSelected(accountId)) {
+    state.selectedAccountIds = state.selectedAccountIds.filter((id) => id !== accountId);
+    return;
+  }
+  state.selectedAccountIds = [...state.selectedAccountIds, accountId];
+}
+
+function syncBulkSelectionWithVisibleAccounts() {
+  if (!state.bulkSelectMode) return;
+  const visibleIds = new Set(currentAccounts().map((account) => account.id));
+  state.selectedAccountIds = state.selectedAccountIds.filter((id) => visibleIds.has(id));
 }
 
 function currentAccounts() {
@@ -1172,9 +1260,11 @@ async function submitAccountForm(form, mode, accountId = null) {
     delete state.revealedSecrets[account.id];
     setToast("Account updated", `${account.label} was saved successfully.`, "success");
   }
-  const synced = await store.syncOwner(state.ownerId);
-  if (!synced) {
+  const syncResult = await store.syncOwner(state.ownerId);
+  if (!syncResult.ok && !syncResult.accountPersisted) {
     setToast("Neon sync failed", "The account changes were not persisted to Neon. Retry after the connection recovers.", "warn");
+  } else if (!syncResult.ok && syncResult.partial) {
+    setToast("Account saved", "The account was saved, but some secondary Neon data is still catching up.", "warn");
   }
   if (mode === "edit") {
     state.modal = { mode: "account-details", accountId: state.selectedAccountId, justUpdated: true };
@@ -1370,6 +1460,7 @@ function renderFilters(owner) {
 
 function renderAccountCard(account, query) {
   const owner = currentOwnerState();
+  const bulkSelected = isAccountBulkSelected(account.id);
   const linkedGoogle = account.platform === "Google" ? null : getGoogleAnchorAccount(owner, account);
   const identityLine = linkedGoogle?.mainEmail
     ? highlightMatch(linkedGoogle.mainEmail, query)
@@ -1380,8 +1471,18 @@ function renderAccountCard(account, query) {
         : "";
 
   return `
-    <article class="account-card ${state.selectedAccountId === account.id ? "is-selected" : ""}" data-action="select-account" data-id="${escapeHtml(account.id)}">
+    <article class="account-card ${state.selectedAccountId === account.id ? "is-selected" : ""} ${bulkSelected ? "is-bulk-selected" : ""} ${state.bulkSelectMode ? "is-bulk-mode" : ""}" data-action="select-account" data-id="${escapeHtml(account.id)}">
       <div class="account-card-header">
+        ${state.bulkSelectMode ? `
+          <button
+            type="button"
+            class="bulk-select-checkbox ${bulkSelected ? "is-active" : ""}"
+            data-action="toggle-account-select"
+            data-id="${escapeHtml(account.id)}"
+            aria-pressed="${bulkSelected ? "true" : "false"}"
+            aria-label="${bulkSelected ? "Deselect account" : "Select account"}"
+          ></button>
+        ` : ""}
         <div class="account-title">
           ${renderPlatformBadge(account.platform)}
         </div>
@@ -1399,6 +1500,7 @@ function renderAccountCard(account, query) {
 }
 
 function renderAccountList(owner) {
+  syncBulkSelectionWithVisibleAccounts();
   const accounts = currentAccounts();
   const query = state.search.trim();
   if (!accounts.length) {
@@ -1416,6 +1518,43 @@ function renderAccountList(owner) {
   return `
     <div class="list-grid">
       ${accounts.map((account) => renderAccountCard(account, query)).join("")}
+    </div>
+  `;
+}
+
+function renderAccountsToolbar(owner) {
+  syncBulkSelectionWithVisibleAccounts();
+  const selectedCount = state.selectedAccountIds.length;
+  const archivedView = isArchivedSelectionView();
+  return `
+    <div class="list-toolbar">
+      <div class="accounts-toolbar-copy">
+        <div class="section-title-row">
+          <button
+            type="button"
+            class="bulk-mode-toggle ${state.bulkSelectMode ? "is-active" : ""}"
+            data-action="toggle-bulk-mode"
+            aria-pressed="${state.bulkSelectMode ? "true" : "false"}"
+            aria-label="${state.bulkSelectMode ? "Exit bulk select mode" : "Enter bulk select mode"}"
+          >
+            <span class="bulk-mode-toggle-box">${state.bulkSelectMode ? "✓" : ""}</span>
+          </button>
+          <div class="section-title">Accounts</div>
+          ${state.bulkSelectMode ? `<span class="selection-count">${escapeHtml(String(selectedCount))} selected</span>` : ""}
+        </div>
+        <div class="meta-line">
+          <span data-region="visible-count">${currentAccounts().length} visible records from ${owner.accounts.length} total accounts</span>
+        </div>
+      </div>
+      <div class="inline-actions">
+        ${state.bulkSelectMode
+          ? `
+            <button class="ghost-button" type="button" data-action="bulk-archive" ${selectedCount ? "" : "disabled"}>${archivedView ? "Restore" : "Archive"}</button>
+            <button class="danger-button" type="button" data-action="bulk-delete" ${selectedCount ? "" : "disabled"}>Delete selected</button>
+          `
+          : `<button class="primary-button" type="button" data-action="open-create">Add account</button>`
+        }
+      </div>
     </div>
   `;
 }
@@ -1486,7 +1625,9 @@ function renderAccountDetailsModal(owner) {
             <button class="icon-button account-details-close" data-action="close-modal" aria-label="Close">×</button>
           </div>
         </div>
-        ${renderAccountDetailsBody(owner, enriched, revealed, secretPreview)}
+        <div class="modal-scroll-shell">
+          ${renderAccountDetailsBody(owner, enriched, revealed, secretPreview)}
+        </div>
       </div>
     </div>
   `;
@@ -1518,10 +1659,9 @@ function renderTopbar(owner) {
         />
       </div>
       <div class="topbar-actions">
-        <button class="primary-button" data-action="open-create">Add account</button>
         <div class="profile-stack">
-          ${renderProfileCircle(state.session?.user, "U", "avatar profile-avatar")}
-          <span class="profile-email">${escapeHtml(state.session?.user?.email ?? "Signed in")}</span>
+          ${renderProfileCircle(getSignedInIdentity(), "U", "avatar profile-avatar")}
+          <span class="profile-email">${escapeHtml(getSignedInEmail())}</span>
         </div>
         <button class="ghost-button" data-action="sign-out">Sign out</button>
       </div>
@@ -1548,8 +1688,8 @@ function renderAccountForm(mode, account, owner) {
   const customPlatformName = knownPlatform || !accountPlatform ? "" : accountPlatform;
   const customRows = mode === "edit" && account?.customFields.length ? account.customFields : [];
   const editableStatusOptions = STATUS_OPTIONS.filter((status) => normalizeText(status) !== normalizeText("archived"));
-  const selectedStatus = account?.status && editableStatusOptions.some((status) => normalizeText(status) === normalizeText(account.status))
-    ? account.status
+  const selectedStatus = account?.status && editableStatusOptions.some((status) => normalizeText(status) === normalizeStatusValue(account.status))
+    ? normalizeStatusValue(account.status)
     : "active";
 
   return `
@@ -1895,23 +2035,11 @@ function renderDashboard() {
       <div class="layout layout-clean">
         <main class="content wide">
           ${renderTopbar(owner)}
-          ${renderSyncStatus(owner)}
-          ${renderIdentityDebug(owner)}
           ${renderFilters(owner)}
           ${getRoute().name === "account-create" ? renderAccountEditorWorkspace(owner) : `
             <section class="workspace single">
               <div class="panel list-panel">
-                <div class="list-toolbar">
-                  <div>
-                    <div class="section-title">Accounts</div>
-                    <div class="meta-line">
-                      <span data-region="visible-count">${currentAccounts().length} visible records from ${owner.accounts.length} total accounts</span>
-                    </div>
-                  </div>
-                  <div class="inline-actions">
-                    <button class="primary-button" type="button" data-action="open-create">Add account</button>
-                  </div>
-                </div>
+                ${renderAccountsToolbar(owner)}
                 <div data-region="account-list">${renderAccountList(owner)}</div>
               </div>
             </section>
@@ -2000,6 +2128,7 @@ function bindGlobalEvents() {
         state.neonError = null;
         state.identityDebug = null;
         state.selectedAccountId = null;
+        clearBulkSelection({ disableMode: true });
         state.secretCache = {};
         state.revealedSecrets = {};
         store.resetMemory?.();
@@ -2013,10 +2142,12 @@ function bindGlobalEvents() {
         openAccountEditor(id);
         break;
       case "open-import":
+        clearBulkSelection({ disableMode: true });
         navigate("#import");
         render();
         break;
       case "open-export":
+        clearBulkSelection({ disableMode: true });
         navigate("#export");
         render();
         break;
@@ -2087,13 +2218,74 @@ function bindGlobalEvents() {
           if (state.selectedAccountId === id) {
             state.selectedAccountId = null;
           }
+          state.selectedAccountIds = state.selectedAccountIds.filter((accountId) => accountId !== id);
           setToast("Account deleted", "The account was removed from your vault.", "success");
           render();
         }
         break;
       case "select-account":
+        if (state.bulkSelectMode) {
+          toggleAccountBulkSelection(id);
+          render();
+          break;
+        }
         setSelected(id);
         break;
+      case "toggle-account-select":
+        toggleAccountBulkSelection(id);
+        render();
+        break;
+      case "toggle-bulk-mode":
+        toggleBulkSelectionMode();
+        render();
+        break;
+      case "bulk-archive": {
+        const ids = [...state.selectedAccountIds];
+        if (!ids.length) break;
+        const restoreMode = isArchivedSelectionView();
+        for (const accountId of ids) {
+          const account = store.getAccount(state.ownerId, accountId);
+          if (!account) continue;
+          if (restoreMode && account.archived) {
+            store.archiveAccount(state.ownerId, state.authUserId ?? state.ownerId, accountId, false);
+          } else if (!restoreMode && !account.archived) {
+            store.archiveAccount(state.ownerId, state.authUserId ?? state.ownerId, accountId, true);
+          }
+        }
+        await store.syncOwner(state.ownerId);
+        clearBulkSelection();
+        if (!currentOwnerState()?.accounts.length) {
+          toggleBulkSelectionMode(false);
+        }
+        setToast(
+          restoreMode ? "Accounts restored" : "Accounts archived",
+          `${ids.length} account${ids.length === 1 ? "" : "s"} ${restoreMode ? "restored" : "archived"}.`,
+          "success"
+        );
+        render();
+        break;
+      }
+      case "bulk-delete": {
+        const ids = [...state.selectedAccountIds];
+        if (!ids.length) break;
+        if (!confirm(`Delete ${ids.length} selected account${ids.length === 1 ? "" : "s"} and all connected relationships?`)) {
+          break;
+        }
+        for (const accountId of ids) {
+          store.deleteAccount(state.ownerId, state.authUserId ?? state.ownerId, accountId);
+          if (state.selectedAccountId === accountId) {
+            state.selectedAccountId = null;
+          }
+        }
+        await store.syncOwner(state.ownerId);
+        clearBulkSelection();
+        if (!currentOwnerState()?.accounts.length) {
+          toggleBulkSelectionMode(false);
+        }
+        setToast("Accounts deleted", `${ids.length} account${ids.length === 1 ? "" : "s"} deleted.`, "success");
+        render();
+        break;
+      }
       case "set-link-mode": {
         const form = target.closest("form");
         const linkModeInput = form?.querySelector('[name="linkMode"]');
@@ -2200,7 +2392,11 @@ function bindGlobalEvents() {
 
     if (action === "search") {
       state.search = target.value;
-      updateSearchView();
+      if (state.bulkSelectMode) {
+        render();
+      } else {
+        updateSearchView();
+      }
     }
     if (action === "filter-platform") {
       state.filters.platform = target.value;
@@ -2241,8 +2437,14 @@ function bindGlobalEvents() {
       try {
         const parsed = JSON.parse(text);
         store.importOwner(state.ownerId, parsed, state.authUserId ?? state.ownerId);
-        await store.syncOwner(state.ownerId);
-        setToast("Import complete", "Vault snapshot restored successfully.", "success");
+        const syncResult = await store.syncOwner(state.ownerId);
+        if (syncResult.ok) {
+          setToast("Import complete", "Vault snapshot restored successfully.", "success");
+        } else if (syncResult.partial) {
+          setToast("Import mostly complete", "The snapshot loaded, but some secondary Neon data is still catching up.", "warn");
+        } else {
+          setToast("Import sync failed", "The snapshot loaded locally, but Neon could not finish saving it.", "warn");
+        }
         goToDashboard();
         render();
       } catch (error) {
@@ -2284,7 +2486,10 @@ function bindGlobalEvents() {
     }
     if (target.matches('select[name="showArchived"]')) {
       store.setSettings(state.ownerId, { showArchived: target.value === "true" });
-      await store.syncOwner(state.ownerId);
+      const syncResult = await store.syncOwner(state.ownerId);
+      if (!syncResult.ok) {
+        setToast("Settings sync delayed", "The preference changed here, but Neon did not confirm it yet.", "warn");
+      }
       render();
       return;
     }

@@ -550,12 +550,65 @@ export function createStore() {
   const flushTimers = new Map();
   const flushPromises = new Map();
   const pendingSync = new Map();
+  const hydrationState = new Map();
+
+  function createHydrationState() {
+    return {
+      isHydrating: false,
+      hasHydratedRemote: false
+    };
+  }
 
   function getOwnerState(ownerId) {
     if (!owners.has(ownerId)) {
       owners.set(ownerId, createEmptyOwnerState(ownerId));
     }
     return owners.get(ownerId);
+  }
+
+  function getHydrationState(ownerId) {
+    if (!hydrationState.has(ownerId)) {
+      hydrationState.set(ownerId, createHydrationState());
+    }
+    return hydrationState.get(ownerId);
+  }
+
+  function setHydrationState(ownerId, patch = {}) {
+    const next = {
+      ...getHydrationState(ownerId),
+      ...patch
+    };
+    hydrationState.set(ownerId, next);
+    return next;
+  }
+
+  function getLifecycleFlags(ownerId) {
+    const state = getHydrationState(ownerId);
+    return {
+      isHydrating: Boolean(state.isHydrating),
+      hasHydratedRemote: Boolean(state.hasHydratedRemote)
+    };
+  }
+
+  function traceWrite(action, ownerId, details = {}) {
+    const flags = getLifecycleFlags(ownerId);
+    console.trace(`[store:${action}]`, {
+      ownerId,
+      ...flags,
+      ...details
+    });
+  }
+
+  function assertWritesAllowed(ownerId, source) {
+    const flags = getLifecycleFlags(ownerId);
+    const allowed = !flags.isHydrating && flags.hasHydratedRemote;
+    traceWrite(source, ownerId, { allowed, blocked: !allowed });
+    if (!allowed) {
+      throw new Error(
+        `Writes are blocked during Neon hydration (${source})`
+      );
+    }
+    return true;
   }
 
   function getPendingState(ownerId) {
@@ -576,11 +629,14 @@ export function createStore() {
   }
 
   function markUserDirty(ownerId) {
+    assertWritesAllowed(ownerId, "markUserDirty");
     getPendingState(ownerId).userDirty = true;
   }
 
   function markUpsert(ownerId, upsertKey, deleteKey, id) {
     if (!id) return;
+    assertWritesAllowed(ownerId, `markUpsert:${upsertKey}`);
+    traceWrite("pendingUpsert", ownerId, { upsertKey, deleteKey, recordId: id, allowed: true });
     const pending = getPendingState(ownerId);
     pending[upsertKey].add(id);
     if (deleteKey) {
@@ -590,6 +646,8 @@ export function createStore() {
 
   function markDelete(ownerId, deleteKey, upsertKey, id) {
     if (!id) return;
+    assertWritesAllowed(ownerId, `markDelete:${deleteKey}`);
+    traceWrite("pendingDelete", ownerId, { deleteKey, upsertKey, recordId: id, allowed: true });
     const pending = getPendingState(ownerId);
     pending[deleteKey].add(id);
     if (upsertKey) {
@@ -598,6 +656,8 @@ export function createStore() {
   }
 
   function markActivityUpsert(ownerId, id) {
+    assertWritesAllowed(ownerId, "markActivityUpsert");
+    traceWrite("activityUpsert", ownerId, { recordId: id, allowed: true });
     markUpsert(ownerId, "activityUpsert", null, id);
   }
 
@@ -661,6 +721,7 @@ export function createStore() {
   }
 
   function markImportDiff(ownerId, previousOwner, nextOwner) {
+    assertWritesAllowed(ownerId, "markImportDiff");
     markUserDirty(ownerId);
 
     const previousAccounts = new Set(previousOwner.accounts.map((account) => account.id));
@@ -711,8 +772,28 @@ export function createStore() {
       .map((entry) => mapper(ownerId, entry));
   }
 
-  async function deleteRowsByIds(client, table, ids) {
+  function createSyncResult({
+    ok = false,
+    partial = false,
+    stage = null,
+    lastError = null,
+    applied = [],
+    pending = null
+  } = {}) {
+    return {
+      ok,
+      partial,
+      stage,
+      lastError,
+      applied,
+      pending,
+      accountPersisted: !pending?.accountsUpsert?.length || applied.includes("accountsUpsert")
+    };
+  }
+
+  async function deleteRowsByIds(client, ownerId, table, ids) {
     if (!ids.length) return;
+    traceWrite("deleteRowsByIds", ownerId, { table, ids, allowed: true });
     await exec(client.from(table).delete().in("id", ids));
   }
 
@@ -769,6 +850,8 @@ export function createStore() {
   }
 
   async function flushOwner(ownerId) {
+    assertWritesAllowed(ownerId, "flushOwner");
+    traceWrite("flushOwner", ownerId, { allowed: true });
     if (flushPromises.has(ownerId)) {
       return flushPromises.get(ownerId);
     }
@@ -785,48 +868,70 @@ export function createStore() {
             source: "error"
           };
         }
-        return false;
+        return createSyncResult({
+          ok: false,
+          partial: false,
+          stage: "client",
+          lastError: "Neon Data API client unavailable"
+        });
       }
 
       const snapshot = clone(owner);
       const pending = snapshotPendingState(ownerId);
       if (!hasPendingChanges(pending)) {
         dirtyOwners.delete(ownerId);
-        return true;
+        return createSyncResult({
+          ok: true,
+          partial: false,
+          stage: "noop",
+          applied: [],
+          pending
+        });
       }
+      const applied = [];
       try {
         if (pending.userDirty) {
           await exec(client.from("users").upsert(userToRow(ownerId, snapshot), { onConflict: "auth_user_id" }));
+          applied.push("usersUpsert");
         }
 
-        await deleteRowsByIds(client, "custom_field_values", pending.customFieldValuesDelete);
-        await deleteRowsByIds(client, "account_relationships", pending.relationshipsDelete);
-        await deleteRowsByIds(client, "accounts", pending.accountsDelete);
-        await deleteRowsByIds(client, "custom_fields", pending.customFieldsDelete);
+        await deleteRowsByIds(client, ownerId, "custom_field_values", pending.customFieldValuesDelete);
+        if (pending.customFieldValuesDelete.length) applied.push("customFieldValuesDelete");
+        await deleteRowsByIds(client, ownerId, "account_relationships", pending.relationshipsDelete);
+        if (pending.relationshipsDelete.length) applied.push("relationshipsDelete");
+        await deleteRowsByIds(client, ownerId, "accounts", pending.accountsDelete);
+        if (pending.accountsDelete.length) applied.push("accountsDelete");
+        await deleteRowsByIds(client, ownerId, "custom_fields", pending.customFieldsDelete);
+        if (pending.customFieldsDelete.length) applied.push("customFieldsDelete");
 
         const accountRows = collectRows(snapshot, pending.accountsUpsert, accountById, accountToRow, ownerId);
         if (accountRows.length) {
           await exec(client.from("accounts").upsert(accountRows, { onConflict: "id" }));
+          applied.push("accountsUpsert");
         }
 
         const customFieldRows = collectRows(snapshot, pending.customFieldsUpsert, customFieldById, customFieldToRow, ownerId);
         if (customFieldRows.length) {
           await exec(client.from("custom_fields").upsert(customFieldRows, { onConflict: "id" }));
+          applied.push("customFieldsUpsert");
         }
 
         const relationshipRows = collectRows(snapshot, pending.relationshipsUpsert, relationshipById, relationshipToRow, ownerId);
         if (relationshipRows.length) {
           await exec(client.from("account_relationships").upsert(relationshipRows, { onConflict: "id" }));
+          applied.push("relationshipsUpsert");
         }
 
         const customFieldValueRows = collectRows(snapshot, pending.customFieldValuesUpsert, customFieldValueById, customFieldValueToRow, ownerId);
         if (customFieldValueRows.length) {
           await exec(client.from("custom_field_values").upsert(customFieldValueRows, { onConflict: "id" }));
+          applied.push("customFieldValuesUpsert");
         }
 
         const activityRows = collectRows(snapshot, pending.activityUpsert, activityById, activityToRow, ownerId);
         if (activityRows.length) {
           await exec(client.from("activity_log").upsert(activityRows, { onConflict: "id" }));
+          applied.push("activityUpsert");
         }
 
         owner.sync = {
@@ -837,7 +942,13 @@ export function createStore() {
         };
         clearAppliedPendingState(ownerId, pending);
         dirtyOwners.delete(ownerId);
-        return true;
+        return createSyncResult({
+          ok: true,
+          partial: false,
+          stage: "complete",
+          applied,
+          pending
+        });
       } catch (error) {
         owner.sync = {
           ...owner.sync,
@@ -845,7 +956,14 @@ export function createStore() {
           lastSyncError: error?.message ?? String(error),
           source: "error"
         };
-        return false;
+        return createSyncResult({
+          ok: false,
+          partial: applied.length > 0,
+          stage: applied[applied.length - 1] ?? "start",
+          lastError: error?.message ?? String(error),
+          applied,
+          pending
+        });
       }
     })().finally(() => {
       flushPromises.delete(ownerId);
@@ -856,6 +974,8 @@ export function createStore() {
   }
 
   function schedulePersist(ownerId) {
+    assertWritesAllowed(ownerId, "schedulePersist");
+    traceWrite("schedulePersist", ownerId, { allowed: true });
     dirtyOwners.add(ownerId);
     const current = flushTimers.get(ownerId);
     if (current) {
@@ -884,6 +1004,7 @@ export function createStore() {
       dirtyOwners.clear();
       owners.clear();
       pendingSync.clear();
+      hydrationState.clear();
     },
 
     async resolveOwnerIdentity(identity = {}) {
@@ -930,22 +1051,43 @@ export function createStore() {
     },
 
     async initialize(ownerId, profile = {}, options = {}) {
-      const remoteOwner = await loadRemoteOwner(ownerId);
-      const owner = remoteOwner;
-      owner.profile = {
-        ...owner.profile,
-        ...profile,
-        ownerId
-      };
-      owner.sync = {
-        ...owner.sync,
-        remoteEnabled: Boolean(config.neonDataApiUrl),
-        source: "neon",
-        lastSyncError: null
-      };
-      owners.set(ownerId, owner);
       resetPendingState(ownerId);
-      return clone(owner);
+      setHydrationState(ownerId, {
+        isHydrating: true,
+        hasHydratedRemote: false
+      });
+      try {
+        const remoteOwner = await loadRemoteOwner(ownerId);
+        const owner = remoteOwner;
+        owner.profile = {
+          ...owner.profile,
+          ownerId,
+          canonicalKey: profile.canonicalKey ?? owner.profile.canonicalKey ?? ownerId,
+          googleSubject: profile.googleSubject ?? owner.profile.googleSubject ?? "",
+          googleEmail: profile.googleEmail ?? owner.profile.googleEmail ?? "",
+          displayName: owner.profile.displayName || profile.displayName || owner.profile.email || profile.email || "Account owner",
+          email: owner.profile.email || profile.email || "",
+          avatarUrl: owner.profile.avatarUrl || profile.avatarUrl || ""
+        };
+        owner.sync = {
+          ...owner.sync,
+          remoteEnabled: Boolean(config.neonDataApiUrl),
+          source: "neon",
+          lastSyncError: null
+        };
+        owners.set(ownerId, owner);
+        setHydrationState(ownerId, {
+          isHydrating: false,
+          hasHydratedRemote: true
+        });
+        return clone(owner);
+      } catch (error) {
+        setHydrationState(ownerId, {
+          isHydrating: false,
+          hasHydratedRemote: false
+        });
+        throw error;
+      }
     },
 
     getOwner(ownerId) {
@@ -1023,6 +1165,8 @@ export function createStore() {
     },
 
     createAccount(ownerId, actorId, draft) {
+      assertWritesAllowed(ownerId, "createAccount");
+      traceWrite("accountUpsert:create", ownerId, { allowed: true });
       const owner = touchOwner(ownerId);
       const anchorAccount = draft.linkMode === "linkedGoogle" ? accountById(owner, draft.anchorAccountId) : null;
       const account = {
@@ -1107,6 +1251,8 @@ export function createStore() {
     },
 
     updateAccount(ownerId, actorId, accountId, draft) {
+      assertWritesAllowed(ownerId, "updateAccount");
+      traceWrite("accountUpsert:update", ownerId, { recordId: accountId, allowed: true });
       const owner = touchOwner(ownerId);
       const account = accountById(owner, accountId);
       if (!account) {
@@ -1198,6 +1344,8 @@ export function createStore() {
     },
 
     archiveAccount(ownerId, actorId, accountId, archived) {
+      assertWritesAllowed(ownerId, "archiveAccount");
+      traceWrite("accountUpsert:archive", ownerId, { recordId: accountId, archived, allowed: true });
       const owner = touchOwner(ownerId);
       const account = accountById(owner, accountId);
       if (!account) throw new Error("Account not found");
@@ -1222,6 +1370,8 @@ export function createStore() {
     },
 
     deleteAccount(ownerId, actorId, accountId) {
+      assertWritesAllowed(ownerId, "deleteAccount");
+      traceWrite("accountDelete", ownerId, { recordId: accountId, allowed: true });
       const owner = touchOwner(ownerId);
       const account = accountById(owner, accountId);
       if (!account) throw new Error("Account not found");
@@ -1259,6 +1409,8 @@ export function createStore() {
     },
 
     upsertCustomField(ownerId, actorId, fieldDraft) {
+      assertWritesAllowed(ownerId, "upsertCustomField");
+      traceWrite("customFieldUpsert", ownerId, { recordId: fieldDraft.fieldId ?? null, allowed: true });
       const owner = touchOwner(ownerId);
       let field = fieldDraft.fieldId ? customFieldById(owner, fieldDraft.fieldId) : null;
       if (!field) {
@@ -1299,6 +1451,12 @@ export function createStore() {
     },
 
     setCustomFieldValue(ownerId, actorId, accountId, fieldDraft) {
+      assertWritesAllowed(ownerId, "setCustomFieldValue");
+      traceWrite("customFieldValueUpsert", ownerId, {
+        recordId: fieldDraft.fieldId ?? null,
+        accountId,
+        allowed: true
+      });
       const owner = touchOwner(ownerId);
       let field = fieldDraft.fieldId ? customFieldById(owner, fieldDraft.fieldId) : null;
       if (!field) {
@@ -1345,6 +1503,8 @@ export function createStore() {
     },
 
     deleteCustomFieldValue(ownerId, actorId, accountId, fieldId) {
+      assertWritesAllowed(ownerId, "deleteCustomFieldValue");
+      traceWrite("customFieldValueDelete", ownerId, { recordId: fieldId, accountId, allowed: true });
       const owner = touchOwner(ownerId);
       const deletedIds = owner.customFieldValues
         .filter((value) => value.accountId === accountId && value.fieldId === fieldId)
@@ -1371,6 +1531,8 @@ export function createStore() {
     },
 
     addRelationship(ownerId, actorId, relationshipDraft) {
+      assertWritesAllowed(ownerId, "addRelationship");
+      traceWrite("relationshipUpsert", ownerId, { allowed: true });
       const owner = touchOwner(ownerId);
       const relationship = {
         id: uid("rel"),
@@ -1400,6 +1562,8 @@ export function createStore() {
     },
 
     deleteRelationship(ownerId, actorId, relationshipId) {
+      assertWritesAllowed(ownerId, "deleteRelationship");
+      traceWrite("relationshipDelete", ownerId, { recordId: relationshipId, allowed: true });
       const owner = touchOwner(ownerId);
       owner.accountRelationships = owner.accountRelationships.filter((relation) => relation.id !== relationshipId);
       const activity = createActivity(owner, {
@@ -1482,6 +1646,8 @@ export function createStore() {
     },
 
     importOwner(ownerId, snapshot, actorId) {
+      assertWritesAllowed(ownerId, "importOwner");
+      traceWrite("importOwner", ownerId, { allowed: true });
       const previousOwner = owners.get(ownerId) ?? createEmptyOwnerState(ownerId);
       const owner = normalizeOwnerSnapshot(ownerId, snapshot);
       owners.set(ownerId, owner);
@@ -1502,6 +1668,8 @@ export function createStore() {
     },
 
     updateProfile(ownerId, patch, options = {}) {
+      assertWritesAllowed(ownerId, "updateProfile");
+      traceWrite("profileWrite", ownerId, { persist: options.persist !== false });
       const owner = touchOwner(ownerId);
       owner.profile = {
         ...owner.profile,
@@ -1516,6 +1684,8 @@ export function createStore() {
     },
 
     setSettings(ownerId, patch, options = {}) {
+      assertWritesAllowed(ownerId, "setSettings");
+      traceWrite("settingsWrite", ownerId, { persist: options.persist !== false, patch });
       const owner = touchOwner(ownerId);
       owner.settings = {
         ...owner.settings,
@@ -1532,6 +1702,8 @@ export function createStore() {
     },
 
     addCustomPlatform(ownerId, category, platformName) {
+      assertWritesAllowed(ownerId, "addCustomPlatform");
+      traceWrite("settingsWrite:addCustomPlatform", ownerId, { category, platformName, allowed: true });
       const owner = touchOwner(ownerId);
       const key = normalizePlatformCategory(category);
       const name = String(platformName ?? "").trim();
@@ -1550,6 +1722,8 @@ export function createStore() {
     },
 
     async syncOwner(ownerId) {
+      assertWritesAllowed(ownerId, "syncOwner");
+      traceWrite("syncOwner", ownerId, { allowed: true });
       return flushOwner(ownerId);
     }
   };

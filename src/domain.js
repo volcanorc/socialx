@@ -74,7 +74,7 @@ export function getPlatformOptionsForCategory(category = "social", customPlatfor
   return [...new Set(merged)];
 }
 
-export const STATUS_OPTIONS = ["active", "paused", "locked", "archived", "pending", "closed"];
+export const STATUS_OPTIONS = ["active", "inactive", "archived"];
 
 export const RELATIONSHIP_TYPES = [
   "anchor",
