@@ -47,6 +47,9 @@ const state = {
   selectedAccountIds: [],
   modal: null,
   toast: null,
+  exportSnapshotJson: "",
+  exportSnapshotStatus: "idle",
+  exportSnapshotError: "",
   duplicateWarnings: [],
   secretCache: {},
   revealedSecrets: {},
@@ -1291,6 +1294,362 @@ function getDraftFromForm(form) {
   };
 }
 
+function parseSimpleImport(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) {
+    throw new Error("Paste one account object, an array of account objects, or comma-separated account objects.");
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    try {
+      return JSON.parse(`[${raw}]`);
+    } catch {
+      throw new Error("The import JSON is invalid. Paste a single object, an array, or comma-separated objects.");
+    }
+  }
+}
+
+function normalizeImportLinkMode(value) {
+  if (value === 1 || value === "1") return 1;
+  if (value === 2 || value === "2" || value == null || value === "") return 2;
+  return Number.NaN;
+}
+
+function findGoogleAnchorByEmail(owner, email) {
+  const exactEmail = String(email ?? "").trim();
+  if (!owner || !exactEmail) return null;
+  return owner.accounts.find(
+    (account) => normalizeText(account.platform) === normalizeText("Google") && String(account.mainEmail ?? "").trim() === exactEmail
+  ) ?? null;
+}
+
+function isLinkedToAnchor(owner, account, anchorId) {
+  if (!owner || !account || !anchorId) return false;
+  return owner.accountRelationships.some(
+    (relation) =>
+      relation.childAccountId === account.id &&
+      relation.parentAccountId === anchorId &&
+      relation.relationshipType === "anchor"
+  );
+}
+
+function findLinkedPlatformDuplicate(owner, anchorAccountId, platform) {
+  if (!owner || !anchorAccountId || !platform) return null;
+  return owner.accounts.find((account) => {
+    if (normalizeText(account.platform) === normalizeText("Google")) return false;
+    if (normalizeText(account.platform) !== normalizeText(platform)) return false;
+    return isLinkedToAnchor(owner, account, anchorAccountId);
+  }) ?? null;
+}
+
+function normalizeSimpleImportItem(raw, index) {
+  const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const linkMode = normalizeImportLinkMode(item.linkMode);
+  const normalized = {
+    index,
+    linkMode,
+    email: String(item.email ?? "").trim(),
+    platform: String(item.platform ?? "").trim(),
+    username: String(item.username ?? "").trim(),
+    password: String(item.password ?? "").trim(),
+    status: normalizeStatusValue(String(item.status ?? "active").trim() || "active"),
+    notes: String(item.notes ?? "").trim(),
+    customFields: item.customFields == null ? null : item.customFields
+  };
+  return normalized;
+}
+
+function validateSimpleImportBatch(rawInput, owner) {
+  const rawItems = Array.isArray(rawInput) ? rawInput : [rawInput];
+  const normalizedItems = rawItems.map((item, index) => normalizeSimpleImportItem(item, index));
+  const errors = [];
+
+  if (!normalizedItems.length) {
+    errors.push("Add at least one account object before importing.");
+  }
+
+  for (const item of normalizedItems) {
+    const label = `Item ${item.index + 1}`;
+    if (!item.platform) {
+      errors.push(`${label}: platform is missing. Add a platform like "Discord" or "GCash".`);
+    }
+    if (![1, 2].includes(item.linkMode)) {
+      errors.push(`${label}: linkMode must be 1 or 2.`);
+    }
+    if (item.linkMode === 1 && !item.email) {
+      errors.push(`${label}: email is required when linkMode is 1.`);
+    }
+    if (item.customFields !== null) {
+      const customFields = item.customFields;
+      if (!customFields || typeof customFields !== "object" || Array.isArray(customFields)) {
+        errors.push(`${label}: customFields must contain customlabel and customvalue.`);
+      } else {
+        const customLabel = String(customFields.customlabel ?? "").trim();
+        const customValue = String(customFields.customvalue ?? "").trim();
+        if (!customLabel || !customValue) {
+          errors.push(`${label}: customFields must contain customlabel and customvalue.`);
+        }
+      }
+    }
+    if (item.linkMode === 1 && item.email) {
+      const anchor = findGoogleAnchorByEmail(owner, item.email);
+      if (!anchor) {
+        const suggestion = owner.accounts.find((account) => normalizeText(account.platform) === normalizeText("Google") && account.mainEmail)?.mainEmail;
+        errors.push(
+          `${label}: email "${item.email}" does not match any existing Google account.${suggestion ? ` Use an existing Google email like "${suggestion}".` : ""}`
+        );
+      }
+    }
+  }
+
+  return { normalizedItems, errors };
+}
+
+function findSeparateImportDuplicate(owner, item) {
+  if (!owner || !item.platform) return null;
+  const platform = normalizeText(item.platform);
+  const username = normalizeText(item.username);
+  const email = normalizeText(item.email);
+  const hasUsername = Boolean(username);
+  const hasEmail = Boolean(email);
+
+  return owner.accounts.find((account) => {
+    if (normalizeText(account.platform) !== platform) return false;
+    if (getGoogleAnchorAccount(owner, account)) return false;
+    if (hasUsername && normalizeText(account.username) !== username) return false;
+    if (hasEmail && normalizeText(account.mainEmail) !== email) return false;
+    if (!hasUsername && !hasEmail) return false;
+    return true;
+  }) ?? null;
+}
+
+function buildCustomFieldDraftsFromSimple(item, existingCustomFields = []) {
+  if (!item.customFields) {
+    return existingCustomFields.map((field) => ({
+      fieldId: field.field?.id ?? field.fieldId ?? "",
+      valueType: field.field?.valueType ?? field.valueType ?? "text",
+      name: field.field?.name ?? field.name ?? "",
+      valueText: field.valueText ?? "",
+      visibility: field.field?.visibility ?? field.visibility ?? "masked"
+    }));
+  }
+
+  const customLabel = String(item.customFields.customlabel ?? "").trim();
+  const customValue = String(item.customFields.customvalue ?? "").trim();
+  if (!customLabel || !customValue) return [];
+
+  const existingMatch = existingCustomFields.find(
+    (field) => normalizeText(field.field?.name ?? field.name ?? "") === normalizeText(customLabel)
+  );
+  const preserved = existingCustomFields
+    .filter((field) => field !== existingMatch)
+    .map((field) => ({
+      fieldId: field.field?.id ?? field.fieldId ?? "",
+      valueType: field.field?.valueType ?? field.valueType ?? "text",
+      name: field.field?.name ?? field.name ?? "",
+      valueText: field.valueText ?? "",
+      visibility: field.field?.visibility ?? field.visibility ?? "masked"
+    }));
+
+  return [
+    {
+      fieldId: existingMatch?.field?.id ?? existingMatch?.fieldId ?? "",
+      valueType: "text",
+      name: customLabel,
+      valueText: customValue,
+      visibility: existingMatch?.field?.visibility ?? existingMatch?.visibility ?? "masked"
+    },
+    ...preserved
+  ];
+}
+
+async function buildDraftFromSimpleImportItem(owner, item, existingAccount = null) {
+  const anchorAccount = item.linkMode === 1 ? findGoogleAnchorByEmail(owner, item.email) : null;
+  const existingCategory = existingAccount ? getPlatformCategoryForPlatform(existingAccount.platform, owner) : null;
+  const inferredCategory = getPlatformCategoryForPlatform(item.platform || existingAccount?.platform || "social", owner);
+  const platformCategory = existingCategory ?? inferredCategory;
+  const normalizedPlatform = item.platform || existingAccount?.platform || "Google";
+  const builtInPlatform = buildPlatformOptions(owner, platformCategory, { linkedGoogleMode: item.linkMode === 1 })
+    .find((option) => normalizeText(option) === normalizeText(normalizedPlatform));
+  const platform = builtInPlatform ?? "Custom";
+  const customPlatformName = builtInPlatform ? "" : normalizedPlatform;
+  const password = item.password;
+  const secretRecord = password
+    ? await encryptSecret(password, state.passphrase || "")
+    : (existingAccount?.secretRecord ?? null);
+  const existingCustomFields = existingAccount?.customFields ?? [];
+
+  return {
+    linkMode: item.linkMode === 1 ? "linkedGoogle" : "separate",
+    anchorAccountId: anchorAccount?.id ?? "",
+    platformCategory,
+    platform,
+    customPlatformName,
+    mainEmail: item.linkMode === 1 ? anchorAccount?.mainEmail ?? "" : (item.email || existingAccount?.mainEmail || ""),
+    username: item.username || existingAccount?.username || "",
+    secretRecord,
+    status: item.status || normalizeStatusValue(existingAccount?.status || "active"),
+    notes: item.notes || existingAccount?.notes || "",
+    customFields: buildCustomFieldDraftsFromSimple(item, existingCustomFields),
+    archived: normalizeStatusValue(item.status || existingAccount?.status || "active") === "archived",
+    favorite: existingAccount?.favorite ?? false,
+    tags: existingAccount?.tags ?? []
+  };
+}
+
+async function applySimpleImportBatch(items, ownerId, actorId) {
+  const owner = currentOwnerState();
+  const results = { created: 0, merged: 0, skipped: [] };
+  if (!owner) {
+    throw new Error("SocialX is still loading your Neon data. Retry import after the dashboard is ready.");
+  }
+
+  for (const item of items) {
+    if (item.linkMode === 1) {
+      const anchorAccount = findGoogleAnchorByEmail(owner, item.email);
+      const duplicate = findLinkedPlatformDuplicate(owner, anchorAccount?.id, item.platform);
+      if (duplicate) {
+        results.skipped.push(
+          `Item ${item.index + 1} skipped: ${item.platform} is already linked to ${anchorAccount.mainEmail}. Existing account was kept.`
+        );
+        continue;
+      }
+
+      const createDraft = await buildDraftFromSimpleImportItem(currentOwnerState(), item, null);
+      const resolvedPlatform = normalizeText(createDraft.platform) === normalizeText("Custom")
+        ? createDraft.customPlatformName.trim()
+        : createDraft.platform.trim();
+      if (normalizeText(createDraft.platform) === normalizeText("Custom") && resolvedPlatform) {
+        store.addCustomPlatform(ownerId, createDraft.platformCategory, resolvedPlatform);
+      }
+      const payload = {
+        ...createDraft,
+        platform: resolvedPlatform || createDraft.platform,
+        accountType: resolvedPlatform || createDraft.platform
+      };
+      store.createAccount(ownerId, actorId, payload);
+      results.created += 1;
+      continue;
+    }
+
+    const duplicate = findSeparateImportDuplicate(currentOwnerState(), item);
+    if (duplicate) {
+      const existingAccount = store.getAccount(ownerId, duplicate.id);
+      const updateDraft = await buildDraftFromSimpleImportItem(currentOwnerState(), item, existingAccount);
+      const resolvedPlatform = normalizeText(updateDraft.platform) === normalizeText("Custom")
+        ? updateDraft.customPlatformName.trim()
+        : updateDraft.platform.trim();
+      if (normalizeText(updateDraft.platform) === normalizeText("Custom") && resolvedPlatform) {
+        store.addCustomPlatform(ownerId, updateDraft.platformCategory, resolvedPlatform);
+      }
+      const payload = {
+        ...updateDraft,
+        platform: resolvedPlatform || updateDraft.platform,
+        accountType: resolvedPlatform || existingAccount?.accountType || updateDraft.platform
+      };
+      store.updateAccount(ownerId, actorId, duplicate.id, payload);
+      results.merged += 1;
+      continue;
+    }
+
+    const createDraft = await buildDraftFromSimpleImportItem(currentOwnerState(), item, null);
+    const resolvedPlatform = normalizeText(createDraft.platform) === normalizeText("Custom")
+      ? createDraft.customPlatformName.trim()
+      : createDraft.platform.trim();
+    if (normalizeText(createDraft.platform) === normalizeText("Custom") && resolvedPlatform) {
+      store.addCustomPlatform(ownerId, createDraft.platformCategory, resolvedPlatform);
+    }
+    const payload = {
+      ...createDraft,
+      platform: resolvedPlatform || createDraft.platform,
+      accountType: resolvedPlatform || createDraft.platform
+    };
+    store.createAccount(ownerId, actorId, payload);
+    results.created += 1;
+  }
+
+  return results;
+}
+
+async function buildSimpleExportSnapshot(ownerId) {
+  const owner = currentOwnerState();
+  if (!owner || !ownerId) return [];
+  const exported = [];
+  const accounts = store.listAccounts(ownerId, {
+    platform: "all",
+    status: "all",
+    archived: "all",
+    favorite: "all",
+    linkedTo: "all",
+    tag: "",
+    sort: "updated_desc"
+  });
+
+  for (const account of accounts) {
+    const enriched = store.getAccount(ownerId, account.id);
+    const anchor = getGoogleAnchorAccount(owner, account);
+    const entry = {
+      linkMode: anchor ? 1 : 2,
+      platform: account.platform,
+      status: normalizeStatusValue(account.status || (account.archived ? "archived" : "active"))
+    };
+
+    const email = anchor?.mainEmail || account.mainEmail;
+    if (email) entry.email = email;
+    if (account.username) entry.username = account.username;
+    if (account.notes) entry.notes = account.notes;
+
+    if (account.secretRecord?.ciphertext) {
+      try {
+        const password = await decryptSecret(account.secretRecord, state.passphrase || "");
+        if (password && password !== "Encrypted") {
+          entry.password = password;
+        }
+      } catch {
+        // Omit passwords that cannot be decrypted with the current passphrase.
+      }
+    }
+
+    const firstCustomField = enriched?.customFields?.find(
+      (field) => String(field.field?.name ?? "").trim() && String(field.valueText ?? "").trim()
+    );
+    if (firstCustomField) {
+      entry.customFields = {
+        customlabel: firstCustomField.field.name,
+        customvalue: firstCustomField.valueText
+      };
+    }
+
+    exported.push(entry);
+  }
+
+  return exported;
+}
+
+async function prepareExportSnapshot() {
+  if (!state.ownerId || !currentOwnerState()) {
+    state.exportSnapshotStatus = "error";
+    state.exportSnapshotError = "SocialX is still loading your Neon data.";
+    state.exportSnapshotJson = "";
+    return;
+  }
+  state.exportSnapshotStatus = "loading";
+  state.exportSnapshotError = "";
+  render();
+  try {
+    const snapshot = await buildSimpleExportSnapshot(state.ownerId);
+    state.exportSnapshotJson = JSON.stringify(snapshot, null, 2);
+    state.exportSnapshotStatus = "ready";
+    state.exportSnapshotError = "";
+  } catch (error) {
+    state.exportSnapshotStatus = "error";
+    state.exportSnapshotError = error?.message ?? String(error);
+    state.exportSnapshotJson = "";
+  }
+  render();
+}
+
 async function evaluateDuplicates(form, ignoreId = null) {
   if (!state.ownerId) return [];
   const draft = getDraftFromForm(form);
@@ -1650,7 +2009,11 @@ function renderAccountsToolbar(owner) {
             <button class="ghost-button" type="button" data-action="bulk-archive" ${selectedCount ? "" : "disabled"}>${archivedView ? "Restore" : "Archive"}</button>
             <button class="danger-button" type="button" data-action="bulk-delete" ${selectedCount ? "" : "disabled"}>Delete selected</button>
           `
-          : `<button class="primary-button" type="button" data-action="open-create">Add account</button>`
+          : `
+            <button class="secondary-button" type="button" data-action="open-import">Import</button>
+            <button class="secondary-button" type="button" data-action="open-export">Export</button>
+            <button class="primary-button" type="button" data-action="open-create">Add account</button>
+          `
         }
       </div>
     </div>
@@ -1959,6 +2322,9 @@ function renderModal() {
   if (!state.modal || !state.ownerId) return "";
   const owner = currentOwnerState();
   const mode = state.modal.mode;
+  if (mode === "import-help") {
+    return renderImportHelpModal();
+  }
   if (mode === "account-details") {
     return renderAccountDetailsModal(owner);
   }
@@ -1999,18 +2365,19 @@ function renderImportPage() {
       <div class="panel list-panel">
         <div class="panel-head">
           <div>
-            <div class="section-title">Import vault</div>
-            <div class="meta-line">Restore from a SocialX JSON export.</div>
+            <div class="section-title">Import accounts</div>
+            <div class="meta-line">Paste simple SocialX account JSON. SocialX will generate IDs, timestamps, relationships, and Neon metadata for you.</div>
           </div>
           <button class="secondary-button" type="button" data-action="go-dashboard">Back</button>
         </div>
         <form id="importForm">
           <div class="form-field full">
-            <label>Snapshot JSON</label>
-            <textarea name="snapshot" rows="14" placeholder="Paste exported JSON here or choose a file"></textarea>
+            <label>Account JSON</label>
+            <textarea name="snapshot" rows="14" placeholder="Paste one object, an array, or comma-separated account objects here"></textarea>
             <input type="file" accept="application/json" data-import-file hidden />
           </div>
           <div class="form-actions">
+            <button class="icon-button import-help-trigger" type="button" data-action="open-import-help" aria-label="Import help">?</button>
             <button class="secondary-button" type="button" data-action="load-import-file">Load file</button>
             <button class="secondary-button" type="button" data-action="go-dashboard">Cancel</button>
             <button class="primary-button" type="submit">Import</button>
@@ -2027,13 +2394,13 @@ function renderExportPage(snapshot) {
       <div class="panel list-panel">
         <div class="panel-head">
           <div>
-            <div class="section-title">Export vault</div>
-            <div class="meta-line">Copy or download your current SocialX snapshot.</div>
+            <div class="section-title">Export accounts</div>
+            <div class="meta-line">Copy or download your current accounts in the simple SocialX JSON format.</div>
           </div>
           <button class="secondary-button" type="button" data-action="go-dashboard">Back</button>
         </div>
         <div class="code-panel">
-          <pre id="exportSnapshot" style="margin: 0; white-space: pre-wrap;">${escapeHtml(JSON.stringify(snapshot, null, 2))}</pre>
+          <pre id="exportSnapshot" style="margin: 0; white-space: pre-wrap;">${escapeHtml(snapshot)}</pre>
         </div>
         <div class="form-actions" style="margin-top: 14px;">
           <button class="secondary-button" type="button" data-action="copy-export-json">Copy JSON</button>
@@ -2050,15 +2417,15 @@ function renderImportModal() {
       <div class="modal">
         <div class="modal-head">
           <div>
-            <h2>Import vault snapshot</h2>
-            <div class="meta-line">Upload a SocialX JSON export to restore accounts, fields, relationships, and logs.</div>
+            <h2>Import accounts</h2>
+            <div class="meta-line">Upload simple SocialX account JSON and let the app generate the rest.</div>
           </div>
           <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
         </div>
         <form id="importForm">
           <div class="form-field full">
-            <label>Snapshot JSON</label>
-            <textarea name="snapshot" rows="14" placeholder='Paste exported JSON here or choose a file'></textarea>
+            <label>Account JSON</label>
+            <textarea name="snapshot" rows="14" placeholder='Paste one object, an array, or comma-separated account objects here'></textarea>
             <input type="file" accept="application/json" data-import-file hidden />
           </div>
           <div class="form-actions">
@@ -2078,18 +2445,60 @@ function renderExportModal(snapshot) {
       <div class="modal">
         <div class="modal-head">
           <div>
-            <h2>Export vault snapshot</h2>
-            <div class="meta-line">Copy or download the current owner vault as JSON.</div>
+            <h2>Export accounts</h2>
+            <div class="meta-line">Copy or download the current owner accounts as simple JSON.</div>
           </div>
           <button class="icon-button" data-action="close-modal" aria-label="Close">Ã—</button>
         </div>
         <div class="custom-field-box">
-          <pre style="white-space: pre-wrap; margin: 0; max-height: 52vh; overflow: auto;">${escapeHtml(JSON.stringify(snapshot, null, 2))}</pre>
+          <pre style="white-space: pre-wrap; margin: 0; max-height: 52vh; overflow: auto;">${escapeHtml(snapshot)}</pre>
         </div>
         <div class="form-actions">
           <button class="secondary-button" data-action="copy-export-json">Copy JSON</button>
           <button class="primary-button" data-action="download-export-json">Download JSON</button>
           <button class="secondary-button" data-action="close-modal">Close</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderImportHelpModal() {
+  return `
+    <div class="modal-backdrop" data-action="close-modal">
+      <div class="modal import-help-modal" role="dialog" aria-modal="true" aria-labelledby="importHelpTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="importHelpTitle">How import works</h2>
+            <div class="meta-line">Simple steps for bringing accounts into SocialX.</div>
+          </div>
+          <button class="icon-button" data-action="close-modal" aria-label="Close">×</button>
+        </div>
+        <div class="import-help-content">
+          <ol class="import-help-steps">
+            <li>Paste your account JSON or load a <code>.json</code> file.</li>
+            <li>Use one object, an array, or comma-separated objects.</li>
+            <li>Make sure each item has a <code>platform</code>.</li>
+            <li>Use <code>linkMode: 1</code> only when the email already exists on a saved Google account in SocialX.</li>
+            <li>Click <strong>Import</strong>. SocialX creates IDs, timestamps, and the rest automatically.</li>
+            <li>If there is an error, nothing is deleted. Fix the message and try again.</li>
+          </ol>
+          <div class="note-box import-help-note">
+            <strong>Quick defaults</strong><br />
+            <code>linkMode</code> defaults to <code>2</code> and <code>status</code> defaults to <code>active</code>.
+          </div>
+          <div class="import-help-example">
+            <div class="section-title">Example</div>
+            <pre>{
+  "linkMode": 2,
+  "platform": "GCash",
+  "username": "gcashuser",
+  "notes": "Personal wallet"
+}</pre>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="primary-button" type="button" data-action="close-modal">Got it</button>
         </div>
       </div>
     </div>
@@ -2116,13 +2525,22 @@ function renderDashboard() {
     `;
   }
   if (route.name === "export") {
+    if (state.exportSnapshotStatus === "idle") {
+      void prepareExportSnapshot();
+    }
+    const exportBody =
+      state.exportSnapshotStatus === "loading"
+        ? "Preparing simple account export..."
+        : state.exportSnapshotStatus === "error"
+          ? state.exportSnapshotError || "Unable to prepare the export JSON."
+          : state.exportSnapshotJson;
     return `
       <div class="app-shell">
         <div class="layout">
           <main class="content wide">
             ${renderTopbar(owner)}
             ${renderFilters(owner)}
-            ${renderExportPage(store.exportOwner(state.ownerId))}
+            ${renderExportPage(exportBody)}
           </main>
         </div>
       </div>
@@ -2230,6 +2648,9 @@ function bindGlobalEvents() {
         clearBulkSelection({ disableMode: true });
         state.secretCache = {};
         state.revealedSecrets = {};
+        state.exportSnapshotJson = "";
+        state.exportSnapshotStatus = "idle";
+        state.exportSnapshotError = "";
         store.resetMemory?.();
         navigate("#signin");
         render();
@@ -2245,9 +2666,17 @@ function bindGlobalEvents() {
         navigate("#import");
         render();
         break;
+      case "open-import-help":
+        state.modal = { mode: "import-help" };
+        render();
+        break;
       case "open-export":
         clearBulkSelection({ disableMode: true });
+        state.exportSnapshotJson = "";
+        state.exportSnapshotStatus = "idle";
+        state.exportSnapshotError = "";
         navigate("#export");
+        void prepareExportSnapshot();
         render();
         break;
       case "retry-neon":
@@ -2466,7 +2895,7 @@ function bindGlobalEvents() {
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
-        anchor.download = "socialx-vault.json";
+        anchor.download = "socialx-accounts.json";
         anchor.click();
         URL.revokeObjectURL(url);
         break;
@@ -2538,20 +2967,42 @@ function bindGlobalEvents() {
       event.preventDefault();
       const text = new FormData(form).get("snapshot")?.toString() ?? "";
       try {
-        const parsed = JSON.parse(text);
-        store.importOwner(state.ownerId, parsed, state.authUserId ?? state.ownerId);
-        const syncResult = await store.syncOwner(state.ownerId);
-        if (syncResult.ok) {
-          setToast("Import complete", "Vault snapshot restored successfully.", "success");
+        if (!state.ownerId || !currentOwnerState()) {
+          setToast("Import unavailable", "SocialX is still loading your Neon data. Retry import after the dashboard is ready.", "danger");
+          return;
+        }
+        const parsed = parseSimpleImport(text);
+        const { normalizedItems, errors } = validateSimpleImportBatch(parsed, currentOwnerState());
+        if (!normalizedItems.length) {
+          setToast("Import failed", "Add at least one account object before importing.", "danger");
+          return;
+        }
+        if (errors.length) {
+          setToast("Import failed", errors.join(" "), "danger");
+          return;
+        }
+        const results = await applySimpleImportBatch(normalizedItems, state.ownerId, state.authUserId ?? state.ownerId);
+        let syncResult = { ok: true, partial: false };
+        if (results.created || results.merged) {
+          syncResult = await store.syncOwner(state.ownerId);
+        }
+        if (results.skipped.length) {
+          setToast(
+            "Import complete",
+            `${results.created} created, ${results.merged} merged, ${results.skipped.length} skipped. ${results.skipped[0]}`,
+            syncResult.ok ? "warn" : "warn"
+          );
+        } else if (syncResult.ok) {
+          setToast("Import complete", `${results.created} created and ${results.merged} merged successfully.`, "success");
         } else if (syncResult.partial) {
-          setToast("Import mostly complete", "The snapshot loaded, but some secondary Neon data is still catching up.", "warn");
+          setToast("Import mostly complete", `${results.created} created and ${results.merged} merged, but some secondary Neon data is still catching up.`, "warn");
         } else {
-          setToast("Import sync failed", "The snapshot loaded locally, but Neon could not finish saving it.", "warn");
+          setToast("Import sync failed", "The import completed locally, but Neon could not finish saving it.", "warn");
         }
         goToDashboard();
         render();
       } catch (error) {
-        setToast("Import failed", "The JSON could not be parsed.", "danger");
+        setToast("Import failed", error?.message || "The JSON could not be parsed.", "danger");
       }
     }
   });
