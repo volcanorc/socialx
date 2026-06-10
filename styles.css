@@ -704,6 +704,29 @@ a {
   min-width: 0;
 }
 
+.brand-home {
+  border: 0;
+  padding: 6px 8px;
+  margin: -6px -8px;
+  background: transparent;
+  color: inherit;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.brand-home:hover {
+  background: rgba(148, 163, 184, 0.1);
+  transform: translateY(-1px);
+}
+
+.brand-home:focus-visible {
+  outline: none;
+  background: rgba(97, 215, 199, 0.12);
+  box-shadow: 0 0 0 3px rgba(97, 215, 199, 0.18);
+}
+
 .topbar .title {
   font-family: var(--font-display);
   letter-spacing: -0.03em;
@@ -2027,6 +2050,81 @@ mark {
 .import-help-content {
   display: grid;
   gap: 14px;
+}
+
+.import-guide-content {
+  gap: 18px;
+}
+
+.import-help-intro {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.import-help-section {
+  display: grid;
+  gap: 10px;
+}
+
+.import-help-subtitle {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.import-help-field {
+  display: grid;
+  gap: 6px;
+}
+
+.import-help-field p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.import-help-pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(7, 17, 31, 0.92);
+  color: #e5eef9;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.import-help-pre-compact {
+  padding: 10px 12px;
+}
+
+.import-platform-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.import-platform-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.5rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.import-platform-chip span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .import-help-steps {

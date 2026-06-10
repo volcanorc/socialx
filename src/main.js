@@ -3,6 +3,7 @@ import {
   FIELD_VISIBILITY,
   getPlatformOptionsForCategory,
   normalizePlatformCategory,
+  PLATFORM_OPTIONS,
   PLATFORM_CATEGORY_LABELS,
   PLATFORM_CATEGORY_ORDER,
   RELATIONSHIP_TYPES,
@@ -2217,13 +2218,13 @@ function renderTopbar(owner) {
 
   return `
     <header class="topbar">
-      <div class="topbar-left">
+      <button class="topbar-left brand-home" type="button" data-action="go-home" aria-label="Go to dashboard">
         <img class="brand-mark" src="./assets/socialx-logo.png" alt="SocialX logo" />
         <div>
           <div class="title">${escapeHtml(config.appName)}</div>
           <div class="meta-line">Simple account organizer</div>
         </div>
-      </div>
+      </button>
       <div class="search-wrap">
         <span class="search-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="16" height="16" focusable="false">
@@ -2442,7 +2443,7 @@ function renderModal() {
   const owner = currentOwnerState();
   const mode = state.modal.mode;
   if (mode === "import-help") {
-    return renderImportHelpModal();
+    return renderImportGuideModal();
   }
   if (mode === "account-details") {
     return renderAccountDetailsModal(owner);
@@ -2624,6 +2625,150 @@ function renderImportHelpModal() {
   `;
 }
 
+function renderImportGuideModal() {
+  const platformChips = PLATFORM_OPTIONS.map((platform) => `
+    <span class="import-platform-chip">
+      ${renderPlatformIcon(platform)}
+      <span>${escapeHtml(platform)}</span>
+    </span>
+  `).join("");
+  return `
+    <div class="modal-backdrop" data-action="close-modal">
+      <div class="modal import-help-modal import-guide-modal" role="dialog" aria-modal="true" aria-labelledby="importGuideTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="importGuideTitle">JSON Import Guide</h2>
+            <div class="meta-line">A simple guide for importing accounts into SocialX.</div>
+          </div>
+          <button class="icon-button" data-action="close-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="import-help-content import-guide-content">
+          <p class="import-help-intro">Paste your account JSON or upload a <code>.json</code> file.</p>
+          <p class="import-help-intro">You can import one account object, an array of account objects, or multiple account objects separated by commas.</p>
+
+          <section class="import-help-section">
+            <div class="section-title">JSON Structure</div>
+            <div class="import-help-subtitle">Linked account</div>
+            <p>Use <code>linkMode: 1</code> when you are adding an account that should be linked to an existing Google email already saved in SocialX.</p>
+            <pre class="import-help-pre">{
+  "linkMode": 1,
+  "platform": "GCash",
+  "status": "active",
+  "email": "existing-google-email@gmail.com",
+  "username": "gcashuser",
+  "password": "optional password",
+  "notes": "Personal wallet"
+}</pre>
+            <p>For <code>linkMode: 1</code>, the email must match an existing saved Google account in SocialX. If the email does not exist, the import will not proceed.</p>
+          </section>
+
+          <section class="import-help-section">
+            <div class="import-help-subtitle">Separate account</div>
+            <p>Use <code>linkMode: 2</code> when you are adding a separate account that is not linked to an existing Google email.</p>
+            <pre class="import-help-pre">{
+  "linkMode": 2,
+  "platform": "GCash",
+  "status": "active",
+  "email": "account-email@gmail.com",
+  "username": "gcashuser",
+  "password": "optional password",
+  "notes": "Personal wallet"
+}</pre>
+          </section>
+
+          <section class="import-help-section">
+            <div class="section-title">Field Guide</div>
+            <div class="import-help-field">
+              <strong>linkMode</strong>
+              <p>Choose how the account should be added.</p>
+              <p><code>1</code> means linked account. Use this when the account should be linked to an existing Google email in SocialX.</p>
+              <p><code>2</code> means separate account. Use this when the account should be added as its own account.</p>
+              <p>Default: <code>2</code></p>
+            </div>
+            <div class="import-help-field">
+              <strong>platform</strong>
+              <p>Required.</p>
+              <p>Choose the platform or account type you are adding. Use the same platform labels shown in SocialX, or use <code>Custom</code> if the platform is not listed.</p>
+              <div class="import-platform-grid">${platformChips}</div>
+            </div>
+            <div class="import-help-field">
+              <strong>email</strong>
+              <p>Optional for separate accounts.</p>
+              <p>Required only when using <code>linkMode: 1</code>.</p>
+              <p>For linked accounts, enter the existing Google email you want to link the account to.</p>
+              <pre class="import-help-pre import-help-pre-compact">"email": "sullano.jasonn@gmail.com"</pre>
+            </div>
+            <div class="import-help-field">
+              <strong>username</strong>
+              <p>Optional.</p>
+              <p>Use this for usernames, phone numbers, account IDs, handles, or login names.</p>
+              <pre class="import-help-pre import-help-pre-compact">"username": "gcashuser"</pre>
+            </div>
+            <div class="import-help-field">
+              <strong>password</strong>
+              <p>Optional.</p>
+              <p>Use this only if you want to include a password in the imported account.</p>
+              <pre class="import-help-pre import-help-pre-compact">"password": "your password"</pre>
+            </div>
+            <div class="import-help-field">
+              <strong>status</strong>
+              <p>Optional.</p>
+              <p>Choose one of the following: <code>active</code>, <code>inactive</code>, or <code>archived</code>.</p>
+              <p>Default: <code>active</code></p>
+              <pre class="import-help-pre import-help-pre-compact">"status": "active"</pre>
+            </div>
+            <div class="import-help-field">
+              <strong>notes</strong>
+              <p>Optional.</p>
+              <p>Use this for extra information about the account.</p>
+              <pre class="import-help-pre import-help-pre-compact">"notes": "Personal wallet"</pre>
+            </div>
+            <div class="import-help-field">
+              <strong>customFields</strong>
+              <p>Optional.</p>
+              <p>Use this when you want to add custom information that does not fit in the normal fields.</p>
+              <p>The simple importer currently supports one custom label and one custom value per imported account.</p>
+              <pre class="import-help-pre">"customFields": {
+  "customlabel": "Account Number",
+  "customvalue": "123456789"
+}</pre>
+            </div>
+          </section>
+
+          <section class="import-help-section">
+            <div class="section-title">Complete Example</div>
+            <pre class="import-help-pre">[
+  {
+    "linkMode": 2,
+    "platform": "Google",
+    "status": "active",
+    "email": "sample@gmail.com"
+  },
+  {
+    "linkMode": 1,
+    "platform": "GCash",
+    "status": "active",
+    "email": "sample@gmail.com",
+    "username": "gcashuser",
+    "notes": "Personal wallet"
+  }
+]</pre>
+            <p>In this example, the Google account is added as a separate account, and the GCash account is linked to that Google email.</p>
+          </section>
+
+          <div class="note-box import-help-note">
+            <strong>Quick defaults</strong><br />
+            <code>linkMode</code> defaults to <code>2</code> and <code>status</code> defaults to <code>active</code>. If there is a validation error, nothing is deleted and nothing is imported until the issue is fixed.
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="primary-button" type="button" data-action="close-modal">Got it</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboard() {
   const owner = currentOwnerState();
   if (!owner) {
@@ -2772,6 +2917,10 @@ function bindGlobalEvents() {
         state.exportSnapshotError = "";
         store.resetMemory?.();
         navigate("#signin");
+        render();
+        break;
+      case "go-home":
+        goToDashboard();
         render();
         break;
       case "open-create":

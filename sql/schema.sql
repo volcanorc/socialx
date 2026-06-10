@@ -159,6 +159,7 @@ declare
   v_avatar_url text := nullif(btrim(coalesce(p_avatar_url, '')), '');
   v_google_subject text := nullif(btrim(coalesce(p_google_subject, '')), '');
   v_google_email text := nullif(lower(btrim(coalesce(p_google_email, p_email, ''))), '');
+  v_linked_owner_id text := null;
   v_existing_owner_id text := null;
   v_target_owner_id text := null;
   v_resolution_source text := 'created';
@@ -175,6 +176,19 @@ begin
   v_canonical_key := coalesce(nullif(btrim(coalesce(v_canonical_key, '')), ''), v_google_subject, v_google_email, v_email, v_auth_user_id);
   v_target_owner_id := v_canonical_key;
 
+  select owner_auth_links.owner_auth_user_id
+  into v_linked_owner_id
+  from owner_auth_links
+  where owner_auth_links.auth_user_id = v_auth_user_id
+  limit 1;
+
+  if v_linked_owner_id is not null then
+    v_existing_owner_id := v_linked_owner_id;
+    v_target_owner_id := v_linked_owner_id;
+    v_resolution_source := 'linked';
+  end if;
+
+  if v_existing_owner_id is null then
   select u.auth_user_id
   into v_existing_owner_id
   from users u
@@ -184,6 +198,7 @@ begin
      or (v_google_email is not null and u.google_email = v_google_email)
   order by case when u.auth_user_id = v_target_owner_id then 0 else 1 end, u.created_at asc
   limit 1;
+  end if;
 
   if v_existing_owner_id is null then
     insert into users (
@@ -257,16 +272,18 @@ begin
   else
     update users
     set
-      canonical_key = v_target_owner_id,
+      canonical_key = coalesce(users.canonical_key, v_target_owner_id),
       google_subject = coalesce(users.google_subject, v_google_subject),
       google_email = coalesce(users.google_email, v_google_email),
       display_name = coalesce(nullif(users.display_name, ''), v_display_name, users.display_name),
       email = coalesce(users.email, v_email),
       avatar_url = coalesce(users.avatar_url, v_avatar_url),
       updated_at = now()
-    where auth_user_id = v_target_owner_id;
+      where auth_user_id = v_target_owner_id;
 
-    v_resolution_source := 'existing';
+    if v_resolution_source <> 'linked' then
+      v_resolution_source := 'existing';
+    end if;
   end if;
 
   insert into owner_auth_links (auth_user_id, owner_auth_user_id)
