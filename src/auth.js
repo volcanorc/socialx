@@ -20,13 +20,22 @@ export async function createAuthBridge() {
   async function getSession() {
     try {
       const { data, error } = await client.auth.getSession();
+      const session = data?.session ?? null;
+      const user =
+        data?.user ??
+        session?.user ??
+        data?.currentUser ??
+        session?.currentUser ??
+        data?.session?.currentUser ??
+        null;
       return {
-        session: data?.session ?? null,
-        user:    data?.session?.user ?? null,
-        error:   error ?? null,
+        session,
+        user,
+        raw: data ?? null,
+        error: error ?? null,
       };
     } catch (error) {
-      return { session: null, user: null, error };
+      return { session: null, user: null, raw: null, error };
     }
   }
 

@@ -70,8 +70,32 @@ function getInitials(text = "") {
     .join("");
 }
 
+function normalizeProfileImageUrl(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const neonAuthOrigin = (() => {
+    try {
+      return new URL(config.neonAuthUrl).origin;
+    } catch {
+      return "";
+    }
+  })();
+  try {
+    const resolved = neonAuthOrigin ? new URL(trimmed, neonAuthOrigin) : new URL(trimmed);
+    if (["http:", "https:", "data:", "blob:"].includes(resolved.protocol)) {
+      return resolved.toString();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function getProfileImageUrl(user) {
-  return user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? "";
+  return normalizeProfileImageUrl(
+    user?.image ?? user?.avatarUrl ?? currentOwnerState()?.profile?.avatarUrl ?? ""
+  );
 }
 
 function firstNonEmptyText(...values) {
@@ -89,7 +113,7 @@ function collectIdentitySources(result = {}) {
   const session = result.session ?? {};
   const raw = result.raw ?? {};
   const sessionUser = session.user ?? {};
-  const rawUser = raw.user ?? raw.session?.user ?? {};
+  const rawUser = raw.user ?? raw.currentUser ?? raw.session?.user ?? raw.session?.currentUser ?? {};
   const rawSession = raw.session ?? {};
   const baseSources = [user, sessionUser, session, rawUser, rawSession, raw];
   const metadataSources = baseSources.flatMap((source) => [
@@ -139,6 +163,22 @@ function getSignedInEmail() {
   return getSignedInIdentity().email;
 }
 
+function createSignedInIdentity(identity = {}, authUserId = null) {
+  const displayName = identity.displayName ?? identity.email ?? "Account owner";
+  const email = identity.email ?? "";
+  const avatarUrl = identity.avatarUrl ?? "";
+  return {
+    authUserId: authUserId ?? identity.authUserId ?? null,
+    sessionUserId: identity.sessionUserId ?? null,
+    displayName,
+    name: displayName,
+    email,
+    googleEmail: identity.googleEmail ?? email,
+    avatarUrl,
+    image: avatarUrl
+  };
+}
+
 function normalizeStatusValue(status = "") {
   const normalized = normalizeText(status);
   if (normalized === "archived") return "archived";
@@ -157,7 +197,7 @@ function extractIdentityClaims(result = {}) {
   const session = result.session ?? {};
   const raw = result.raw ?? {};
   const sessionUser = session.user ?? {};
-  const rawUser = raw.user ?? raw.session?.user ?? {};
+  const rawUser = raw.user ?? raw.currentUser ?? raw.session?.user ?? raw.session?.currentUser ?? {};
   const rawSession = raw.session ?? {};
   const sources = collectIdentitySources(result);
   const knownValues = [
@@ -191,16 +231,24 @@ function extractIdentityClaims(result = {}) {
   );
   const email = firstNonEmptyText(
     ...sources.map((source) => source.email),
+    ...sources.map((source) => source.primaryEmail),
+    ...sources.map((source) => source.primary_email),
     ...sources.map((source) => source.email_address),
     ...sources.map((source) => source.mail),
     ...sources.map((source) => source.preferred_username)
   );
   const avatarUrl = firstNonEmptyText(
     ...sources.map((source) => source.image),
+    ...sources.map((source) => source.imageUrl),
+    ...sources.map((source) => source.image_url),
     ...sources.map((source) => source.avatarUrl),
+    ...sources.map((source) => source.avatar),
     ...sources.map((source) => source.avatar_url),
     ...sources.map((source) => source.picture),
+    ...sources.map((source) => source.photo_url),
     ...sources.map((source) => source.picture_url),
+    ...sources.map((source) => source.profileImageUrl),
+    ...sources.map((source) => source.profilePictureUrl),
     ...sources.map((source) => source.profile_picture),
     ...sources.map((source) => source.profile_image_url),
     ...sources.map((source) => source.photoURL)
@@ -225,6 +273,64 @@ function extractIdentityClaims(result = {}) {
     rawSessionUserKeys,
     rawResponseKeys
   };
+}
+
+function collectAvatarDiagnostics(result = {}, identity = {}) {
+  const user = result.user ?? {};
+  const session = result.session ?? {};
+  const raw = result.raw ?? {};
+  const sessionUser = session.user ?? {};
+  const rawUser = raw.user ?? raw.currentUser ?? raw.session?.user ?? raw.session?.currentUser ?? {};
+  const rawSession = raw.session ?? {};
+  const sources = [
+    ["result.user", user],
+    ["result.session.user", sessionUser],
+    ["result.raw.user", rawUser],
+    ["result.raw.session", rawSession]
+  ];
+  const fieldNames = [
+    "image",
+    "imageUrl",
+    "image_url",
+    "avatarUrl",
+    "avatar",
+    "avatar_url",
+    "picture",
+    "photo_url",
+    "picture_url",
+    "profileImageUrl",
+    "profilePictureUrl",
+    "profile_picture",
+    "profile_image_url",
+    "photoURL"
+  ];
+  const candidates = sources.map(([label, source]) => {
+    const values = Object.fromEntries(
+      fieldNames
+        .map((field) => [field, source?.[field]])
+        .filter(([, value]) => typeof value === "string" && value.trim())
+    );
+    return {
+      source: label,
+      keys: Object.keys(source ?? {}),
+      values
+    };
+  });
+  return {
+    normalizedAvatarUrl: identity.avatarUrl ?? "",
+    normalizedProfileImageUrl: normalizeProfileImageUrl(identity.avatarUrl ?? ""),
+    candidates,
+    rawTopLevelKeys: Object.keys(raw ?? {})
+  };
+}
+
+function logAuthDiagnostics(result = {}, identity = {}) {
+  const diagnostics = collectAvatarDiagnostics(result, identity);
+  console.groupCollapsed("[SocialX] Auth identity diagnostics");
+  console.log("Normalized identity:", identity);
+  console.log("Avatar diagnostics:", diagnostics);
+  console.log("Raw auth payload:", result?.raw ?? null);
+  console.groupEnd();
 }
 
 function getCanonicalIdentityKey(identity = {}) {
@@ -452,10 +558,21 @@ async function getAccountSecretValue(accountId) {
 function renderProfileCircle(user, fallbackText = "U", className = "avatar") {
   const imageUrl = getProfileImageUrl(user);
   const title = user?.name ?? user?.email ?? "Profile";
-  if (imageUrl) {
-    return `<img class="${className} avatar-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" title="${escapeHtml(title)}" />`;
+  const initials = escapeHtml(getInitials(user?.name ?? user?.email ?? fallbackText));
+  if (!imageUrl) {
+    return `<div class="${className}" title="${escapeHtml(title)}">${initials}</div>`;
   }
-  return `<div class="${className}" title="${escapeHtml(title)}">${escapeHtml(getInitials(user?.name ?? user?.email ?? fallbackText))}</div>`;
+  return `
+    <span class="${className} avatar-shell" title="${escapeHtml(title)}">
+      <img
+        class="avatar-image"
+        src="${escapeHtml(imageUrl)}"
+        alt="${escapeHtml(title)}"
+        onerror="this.style.display='none'; this.nextElementSibling.hidden=false;"
+      />
+      <span class="avatar-fallback" hidden>${initials}</span>
+    </span>
+  `;
 }
 
 function renderCustomFieldRow(row = {}, options = {}) {
@@ -990,6 +1107,8 @@ async function refreshSession(options = {}) {
   state.neonError = state.session ? null : authError;
   if (state.authUserId) {
     const identity = extractIdentityClaims(result);
+    logAuthDiagnostics(result, identity);
+    state.signedInIdentity = createSignedInIdentity(identity, state.authUserId);
     const profile = {
       ownerId: identity.authUserId,
       canonicalKey: getCanonicalIdentityKey(identity),
@@ -1019,16 +1138,16 @@ async function refreshSession(options = {}) {
         googleSubject: resolved.googleSubject ?? profile.googleSubject,
         canonicalKey: resolved.canonicalKey ?? profile.canonicalKey
       };
-      state.signedInIdentity = {
-        authUserId: state.authUserId,
-        sessionUserId: identity.sessionUserId,
-        displayName: profile.displayName,
-        name: profile.displayName,
-        email: profile.email,
-        googleEmail: profile.googleEmail,
-        avatarUrl: profile.avatarUrl,
-        image: profile.avatarUrl
-      };
+      state.signedInIdentity = createSignedInIdentity(
+        {
+          ...identity,
+          displayName: profile.displayName,
+          email: profile.email,
+          googleEmail: profile.googleEmail,
+          avatarUrl: profile.avatarUrl
+        },
+        state.authUserId
+      );
       await store.initialize(state.ownerId, profile);
       if (!state.ownerId) return;
       render();
@@ -1046,16 +1165,16 @@ async function refreshSession(options = {}) {
         rawSessionUserKeys: identity.rawSessionUserKeys ?? [],
         rawResponseKeys: identity.rawResponseKeys ?? []
       };
-      state.signedInIdentity = {
-        authUserId: state.authUserId,
-        sessionUserId: identity.sessionUserId,
-        displayName: profile.displayName,
-        name: profile.displayName,
-        email: profile.email,
-        googleEmail: profile.googleEmail,
-        avatarUrl: profile.avatarUrl,
-        image: profile.avatarUrl
-      };
+      state.signedInIdentity = createSignedInIdentity(
+        {
+          ...identity,
+          displayName: profile.displayName,
+          email: profile.email,
+          googleEmail: profile.googleEmail,
+          avatarUrl: profile.avatarUrl
+        },
+        state.authUserId
+      );
       state.ownerId = null;
       state.selectedAccountId = null;
       console.warn("Failed to hydrate Neon store.", error);
