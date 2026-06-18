@@ -22,3 +22,5 @@ I use it to organize my real accounts and dummy accounts so I can stop forgettin
 - Edit or update anything later
 
 SocialX is a personal account organizer made to keep everything in one clean place.
+
+I pushed the keys here, please dont hack
