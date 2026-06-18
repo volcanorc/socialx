@@ -1,5 +1,8 @@
 # SocialX
 
+Try it out:
+https://volcanorc.github.io/socialx/
+
 SocialX keeps all my accounts in one place.
 
 I use it to organize my real accounts and dummy accounts so I can stop forgetting them and find everything faster.
